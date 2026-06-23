@@ -14,9 +14,26 @@ function loadEnv() {
       if (m) vars[m[1].trim()] = m[2].trim().replace(/^["']|["']$/g, '');
     });
   }
+  let supabaseUrl = process.env.SUPABASE_URL || vars.SUPABASE_URL || '';
+  let supabaseAnonKey = process.env.SUPABASE_ANON_KEY || vars.SUPABASE_ANON_KEY || '';
+  if (!supabaseUrl || !supabaseAnonKey) {
+    const cfgPath = path.join(dir, 'supabase.config.json');
+    if (fs.existsSync(cfgPath)) {
+      try {
+        const file = JSON.parse(fs.readFileSync(cfgPath, 'utf8'));
+        supabaseUrl = supabaseUrl || file.url || '';
+        supabaseAnonKey = supabaseAnonKey || file.anonKey || '';
+      } catch (e) {
+        console.warn('No se pudo leer supabase.config.json:', e.message);
+      }
+    }
+  }
+  if (!supabaseUrl || !supabaseAnonKey) {
+    console.warn('AVISO: Supabase no configurado. Añade SUPABASE_URL y SUPABASE_ANON_KEY en .env o supabase.config.json');
+  }
   return {
-    supabaseUrl: process.env.SUPABASE_URL || vars.SUPABASE_URL || '',
-    supabaseAnonKey: process.env.SUPABASE_ANON_KEY || vars.SUPABASE_ANON_KEY || '',
+    supabaseUrl,
+    supabaseAnonKey,
     thestatsapiKey: process.env.THESTATSAPI_KEY || vars.THESTATSAPI_KEY || '',
     oddsApiKey: process.env.ODDS_API_KEY || vars.ODDS_API_KEY || '',
     apifootballKey: process.env.APIFOOTBALL_KEY || vars.APIFOOTBALL_KEY || '',

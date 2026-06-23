@@ -22,4 +22,4 @@ Ver comentarios en `supabase/migrations/002_cron_notes.sql`.
 
 ## 6. Frontend
 Copia `.env.example` a `.env` con `SUPABASE_URL` y `SUPABASE_ANON_KEY`.
-En Vercel, añade las mismas variables de entorno y ejecuta `node worldbet-ai/build.js`.
+En Vercel, añade las mismas variables de entorno **o** deja `worldbet-ai/supabase.config.json` (clave pública anon) en el repo para que el build las inyecte automáticamente.
