@@ -1,11 +1,20 @@
 // ========== WORLDBET AI MAIN CLASS ==========
+/** Config por defecto — editable en Configuración si cambian las keys */
+const DEFAULT_CONFIG = {
+  thestatsapiKey: 'fapi_fMpvm5GUyUU0HNB0oSD3krDreoCAAEkk',
+  worldcupApiKey: '',
+  oddsApiKey: 'f943ae12007d245e3ca99c6524ded68e',
+  apifootballKey: '',
+  corsProxy: 'https://corsproxy.io/?',
+  bankroll: 1000,
+  kellyFraction: 0.25,
+  minEdge: 0.05,
+  leagueAvgGoals: 1.35
+};
+
 class WorldBetAI {
   constructor() {
-    this.config = {
-      thestatsapiKey: '', worldcupApiKey: '', oddsApiKey: '', apifootballKey: '',
-      corsProxy: 'https://corsproxy.io/?',
-      bankroll: 1000, kellyFraction: 0.25, minEdge: 0.05, leagueAvgGoals: 1.35
-    };
+    this.config = { ...DEFAULT_CONFIG };
     this.fixtures = [];
     this.predictions = {};
     this.odds = {};
@@ -118,7 +127,13 @@ class WorldBetAI {
     this.bindEvents();
     document.getElementById('bankroll-quick').value = this.config.bankroll;
     await this.loadAllFixtures();
-    await this.computeAllPredictions();
+    if (this.hasConfiguredKeys()) {
+      this.apiClient = new ApiClient(this.config);
+      await this.runApiValidation();
+      if (!this.apiTrust.trusted) await this.computeAllPredictions();
+    } else {
+      await this.computeAllPredictions();
+    }
     this.navigate('dashboard');
     this.updateFooter();
     this.startCountdown();
@@ -929,14 +944,14 @@ class WorldBetAI {
   }
 
   async resetConfig() {
-    this.config = { thestatsapiKey:'', worldcupApiKey:'', oddsApiKey:'', apifootballKey:'',
-      corsProxy:'https://corsproxy.io/?', bankroll:1000, kellyFraction:0.25, minEdge:0.05, leagueAvgGoals:1.35 };
+    this.config = { ...DEFAULT_CONFIG };
     this.apiClient = new ApiClient(this.config);
     this.apiTrust = { tested: false, testing: false, trusted: false, validCount: 0, validSources: [], results: {} };
     this.demoMode = true;
     this.matchDataCache = {};
     this.oddsEventsCache = null;
-    await this.computeAllPredictions();
+    await this.runApiValidation();
+    if (!this.apiTrust.trusted) await this.computeAllPredictions();
     this.updateApiStatus();
     this.render();
     this.showToast('Configuración restablecida');
