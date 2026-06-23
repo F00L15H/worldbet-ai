@@ -391,14 +391,111 @@ const PredictionEngine = {
     };
   },
   over25Probability(homeLambda, awayLambda) {
+    return 1 - this.totalGoalsUnderProbability(homeLambda, awayLambda, 2.5);
+  },
+  totalGoalsUnderProbability(homeLambda, awayLambda, line) {
+    const max = Math.floor(line);
     let under = 0;
-    for (let t = 0; t <= 2; t++) {
-      for (let h = 0; h <= t; h++) {
-        const a = t - h;
-        under += this.poissonProbability(homeLambda, h) * this.poissonProbability(awayLambda, a);
+    for (let h = 0; h <= 8; h++) {
+      for (let a = 0; a <= 8; a++) {
+        if (h + a <= max) {
+          under += this.poissonProbability(homeLambda, h) * this.poissonProbability(awayLambda, a);
+        }
       }
     }
-    return 1 - under;
+    return under;
+  },
+  bttsProbability(homeLambda, awayLambda) {
+    let yes = 0;
+    for (let h = 1; h <= 8; h++) {
+      for (let a = 1; a <= 8; a++) {
+        yes += this.poissonProbability(homeLambda, h) * this.poissonProbability(awayLambda, a);
+      }
+    }
+    return { yes, no: 1 - yes };
+  },
+  firstGoalProbability(homeLambda, awayLambda) {
+    const noGoals = this.poissonProbability(homeLambda, 0) * this.poissonProbability(awayLambda, 0);
+    const withGoals = 1 - noGoals;
+    const total = homeLambda + awayLambda;
+    const homeFirst = total > 0 ? (homeLambda / total) * withGoals : 0;
+    const awayFirst = total > 0 ? (awayLambda / total) * withGoals : 0;
+    return { homeFirst, awayFirst, noGoals };
+  },
+  fairOdds(prob, margin = 0.92) {
+    return prob > 0.001 ? Math.min(99, margin / prob) : 99;
+  },
+  pickConfidence(prob) {
+    if (prob >= 0.50) return 'ALTA';
+    if (prob >= 0.28) return 'MEDIA';
+    return 'CULEBRA';
+  },
+  /**
+   * Genera candidatos de apuesta desde el análisis Poisson + xG + datos API.
+   */
+  buildAnalysisPicks(fixture, result) {
+    const p = result.prediction;
+    const d = result.data;
+    const hL = result.adjusted.adjustedHomeLambda;
+    const aL = result.adjusted.adjustedAwayLambda;
+    const picks = [];
+    const add = (type, label, prob, odds) => {
+      if (prob < 0.05) return;
+      picks.push({
+        type, label, prob,
+        odds: odds || this.fairOdds(prob),
+        confidence: this.pickConfidence(prob)
+      });
+    };
+
+    add('ganador', `${fixture.homeTeam} gana`, p.homeWin, d.marketHomeOdds);
+    add('ganador', 'Empate', p.draw, d.marketDrawOdds);
+    add('ganador', `${fixture.awayTeam} gana`, p.awayWin, d.marketAwayOdds);
+
+    const homeOrDraw = p.homeWin + p.draw;
+    const awayOrDraw = p.awayWin + p.draw;
+    add('doble_chance', `${fixture.homeTeam} o Empate`, homeOrDraw, this.fairOdds(homeOrDraw));
+    add('doble_chance', `${fixture.awayTeam} o Empate`, awayOrDraw, this.fairOdds(awayOrDraw));
+
+    p.top5Scores.slice(0, 3).forEach(s => {
+      add('marcador', `Marcador exacto ${s.home}-${s.away}`, s.probability, this.fairOdds(s.probability));
+    });
+
+    [1.5, 2.5, 3.5].forEach(line => {
+      const under = this.totalGoalsUnderProbability(hL, aL, line);
+      const over = 1 - under;
+      const overOdds = line === 2.5 ? (d.over25Odds || this.fairOdds(over)) : this.fairOdds(over);
+      const underOdds = line === 2.5 ? (d.under25Odds || this.fairOdds(under)) : this.fairOdds(under);
+      add('goles', `Over ${line} goles`, over, overOdds);
+      add('goles', `Under ${line} goles`, under, underOdds);
+    });
+
+    const btts = this.bttsProbability(hL, aL);
+    add('btts', 'Ambos marcan (Sí)', btts.yes, this.fairOdds(btts.yes));
+    add('btts', 'Ambos marcan (No)', btts.no, this.fairOdds(btts.no));
+
+    const fg = this.firstGoalProbability(hL, aL);
+    add('primer_gol', `Primer gol: ${fixture.homeTeam}`, fg.homeFirst, this.fairOdds(fg.homeFirst));
+    add('primer_gol', `Primer gol: ${fixture.awayTeam}`, fg.awayFirst, this.fairOdds(fg.awayFirst));
+
+    return picks;
+  },
+  /**
+   * Puntuación "culebra": prioriza probabilidad de acertar con cuota decente.
+   * No compara modelo vs mercado — busca la mejor opción para ganar según el análisis.
+   */
+  culebraScore(pick) {
+    const { prob, odds, type } = pick;
+    if (prob < 0.08 || !odds || odds < 1.35) return 0;
+    let score = Math.pow(prob, 1.5) * Math.min(odds, 8);
+    if (type === 'ganador' && prob >= 0.38) score *= 1.5;
+    if (type === 'marcador' && prob >= 0.10) score *= 1.25;
+    if (type === 'goles' && prob >= 0.55) score *= 1.3;
+    if (type === 'primer_gol' && prob >= 0.38) score *= 1.15;
+    if (type === 'doble_chance' && prob >= 0.58) score *= 1.1;
+    if (type === 'btts' && prob >= 0.52) score *= 1.05;
+    if (prob < 0.22 && type === 'ganador') score *= 0.35;
+    return score;
   },
   buildFeatures(fixture, data, leagueAvg) {
     return {
@@ -429,40 +526,42 @@ const PredictionEngine = {
       { market: 'Over 2.5 goles', prob: over25Prob, odds: data.over25Odds || 1.9 },
       { market: 'Under 2.5 goles', prob: under25Prob, odds: data.under25Odds || 1.9 }
     ];
-    const valueBets = markets.map(m => ({
-      ...m,
-      ...this.detectValueBet(m.prob, m.odds, config.minEdge),
-      kelly: this.kellyCriterion(m.prob, m.odds, config.bankroll, config.kellyFraction)
-    })).filter(v => v.isValueBet);
-    const result = { features, base, adjusted: adj, prediction: finalPred, over25Prob, under25Prob, valueBets, data };
+    const result = { features, base, adjusted: adj, prediction: finalPred, over25Prob, under25Prob, data };
+    const analysisPicks = this.buildAnalysisPicks(fixture, result);
+    result.analysisPicks = analysisPicks.map(pick => ({
+      ...pick,
+      culebraScore: this.culebraScore(pick),
+      kelly: this.kellyCriterion(pick.prob, pick.odds, config.bankroll, config.kellyFraction)
+    })).sort((a, b) => b.culebraScore - a.culebraScore);
+    result.valueBets = result.analysisPicks.filter(p => p.culebraScore > 0).slice(0, 6);
     result.recommendation = this.buildRecommendation(fixture, result);
     return result;
   },
   /**
-   * Apuesta recomendada: prioriza value bet con EV+; si no, mejor outcome del modelo.
+   * Apuesta recomendada según análisis del modelo (no value betting vs mercado).
    */
   buildRecommendation(fixture, result) {
     const p = result.prediction;
     const ms = p.mostLikelyScore;
     const outcomes = [
-      { label: `${fixture.homeTeam} gana`, prob: p.homeWin, odds: result.data.marketHomeOdds },
-      { label: 'Empate', prob: p.draw, odds: result.data.marketDrawOdds },
-      { label: `${fixture.awayTeam} gana`, prob: p.awayWin, odds: result.data.marketAwayOdds }
+      { label: `${fixture.homeTeam} gana`, prob: p.homeWin },
+      { label: 'Empate', prob: p.draw },
+      { label: `${fixture.awayTeam} gana`, prob: p.awayWin }
     ].sort((a, b) => b.prob - a.prob);
+    const modelWinner = outcomes[0];
     const goalsRec = result.over25Prob >= result.under25Prob
       ? { label: 'Over 2.5 goles', prob: result.over25Prob }
       : { label: 'Under 2.5 goles', prob: result.under25Prob };
-    const bestValue = result.valueBets.length
-      ? [...result.valueBets].sort((a, b) => b.expectedValue - a.expectedValue)[0]
-      : null;
-    const modelWinner = outcomes[0];
-    const useValue = bestValue && bestValue.isValueBet;
-    const primary = useValue ? bestValue : {
-      market: modelWinner.label, prob: modelWinner.prob, odds: modelWinner.odds,
-      recommendation: '📊 Predicción modelo', expectedValue: 0, kelly: null, isValueBet: false
+    const fg = this.firstGoalProbability(result.adjusted.adjustedHomeLambda, result.adjusted.adjustedAwayLambda);
+    const firstGoalPick = fg.homeFirst >= fg.awayFirst
+      ? { label: `Primer gol: ${fixture.homeTeam}`, prob: fg.homeFirst }
+      : { label: `Primer gol: ${fixture.awayTeam}`, prob: fg.awayFirst };
+    const ranked = result.analysisPicks || [];
+    const primary = ranked[0] || {
+      label: modelWinner.label, prob: modelWinner.prob,
+      odds: result.data.marketHomeOdds, type: 'ganador', confidence: 'MEDIA'
     };
-    const primaryType = /Over|Under/i.test(primary.market) ? 'goles'
-      : primary.market === 'Empate' ? 'empate' : 'ganador';
+    const secondary = ranked.slice(1, 5);
     return {
       modelWinner: modelWinner.label,
       modelWinnerProb: modelWinner.prob,
@@ -471,18 +570,20 @@ const PredictionEngine = {
       expectedTotalGoals: (p.expectedHomeGoals + p.expectedAwayGoals).toFixed(1),
       goalsPick: goalsRec.label,
       goalsPickProb: goalsRec.prob,
-      primaryBet: primary.market,
-      primaryAction: primary.recommendation,
-      primaryType,
+      firstGoalPick: firstGoalPick.label,
+      firstGoalProb: firstGoalPick.prob,
+      primaryBet: primary.label,
+      primaryAction: '🎯 Apuesta recomendada',
+      primaryType: primary.type,
       primaryProb: primary.prob,
       primaryOdds: primary.odds,
-      primaryEV: primary.expectedValue || 0,
+      primaryConfidence: primary.confidence,
       primaryKelly: primary.kelly,
-      hasValueBet: !!useValue,
+      hasValueBet: false,
+      picks: ranked.slice(0, 8),
+      secondary,
       dataSources: result.data.dataSources || ['Demo'],
-      summary: useValue
-        ? `${primary.recommendation} → ${primary.market} @ ${primary.odds?.toFixed(2)} (EV ${evFmt(primary.expectedValue)})`
-        : `Ganador: ${modelWinner.label} (${pct(modelWinner.prob)}) · Marcador: ${ms.home}-${ms.away} (${pct(ms.probability)}) · ${goalsRec.label} (${pct(goalsRec.prob)})`
+      summary: `${primary.label} (${pct(primary.prob)}) @ ${primary.odds?.toFixed(2)} · Marcador ${ms.home}-${ms.away} · ${goalsRec.label} · ${firstGoalPick.label}`
     };
   }
 };

@@ -120,6 +120,14 @@ const shell = `<!DOCTYPE html>
     .rec-box { border-radius: var(--radius-md); padding: var(--space-3) var(--space-4); margin: var(--space-3) 0; border: 1px solid var(--color-border); }
     .rec-box-value { background: linear-gradient(135deg, var(--color-gold-highlight), var(--color-surface-offset)); border-color: var(--color-gold); }
     .rec-box-model { background: var(--color-primary-highlight); border-color: var(--color-primary); }
+    .rec-box-culebra { background: linear-gradient(135deg, #1a1530, var(--color-surface-offset)); border-color: #9c27b0; }
+    .rec-picks { margin-top: var(--space-3); padding-top: var(--space-3); border-top: 1px solid var(--color-divider); }
+    .rec-pick-row { display: flex; justify-content: space-between; gap: var(--space-2); font-size: var(--text-sm); padding: var(--space-2) 0; border-bottom: 1px solid var(--color-divider); }
+    .rec-pick-row:last-child { border-bottom: none; }
+    .rec-conf { font-size: var(--text-xs); font-weight: 600; }
+    .rec-conf-alta { color: var(--color-success); }
+    .rec-conf-media { color: var(--color-warning); }
+    .rec-conf-culebra { color: #ce93d8; }
     .rec-box.compact { padding: var(--space-2) var(--space-3); font-size: var(--text-sm); }
     .rec-label { font-size: var(--text-xs); text-transform: uppercase; letter-spacing: 0.06em; color: var(--color-text-muted); margin-bottom: var(--space-2); font-weight: 600; }
     .rec-primary { font-size: var(--text-base); font-weight: 600; margin-bottom: var(--space-2); }
@@ -212,7 +220,7 @@ const shell = `<!DOCTYPE html>
         <button class="nav-item" data-view="today"><i data-lucide="calendar"></i> Partidos Hoy</button>
         <button class="nav-item" data-view="groups"><i data-lucide="users"></i> Fase Grupos</button>
         <button class="nav-item" data-view="knockout"><i data-lucide="trophy"></i> Eliminatorias</button>
-        <button class="nav-item" data-view="valuebets"><i data-lucide="trending-up"></i> Value Bets</button>
+        <button class="nav-item" data-view="valuebets"><i data-lucide="trending-up"></i> Apuestas</button>
         <button class="nav-item" data-view="ai"><i data-lucide="brain"></i> Análisis IA</button>
         <button class="nav-item" data-view="settings"><i data-lucide="settings"></i> Configuración</button>
       </aside>

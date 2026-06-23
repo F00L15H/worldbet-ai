@@ -290,15 +290,19 @@ class WorldBetAI {
       if (!data) continue;
       const pred = PredictionEngine.runFullPrediction(f, data, this.config);
       this.predictions[f.id] = pred;
-      pred.valueBets.forEach(vb => {
+      pred.valueBets.forEach(pick => {
         this.valueBets.push({
           matchId: f.id, match: `${f.homeTeam} vs ${f.awayTeam}`,
-          stage: f.stage, date: f.kickoffUtc, ...vb,
+          stage: f.stage, date: f.kickoffUtc,
+          market: pick.label, prob: pick.prob, odds: pick.odds,
+          confidence: pick.confidence, type: pick.type,
+          culebraScore: pick.culebraScore,
+          kelly: pick.kelly,
           recommendation: pred.recommendation
         });
       });
     }
-    this.valueBets.sort((a, b) => b.expectedValue - a.expectedValue);
+    this.valueBets.sort((a, b) => b.culebraScore - a.culebraScore);
   }
 
   refreshAllPredictions() {
@@ -307,23 +311,30 @@ class WorldBetAI {
 
   renderRecBox(rec, compact) {
     if (!rec) return '';
-    const valueCls = rec.hasValueBet ? 'rec-box-value' : 'rec-box-model';
+    const confCls = rec.primaryConfidence === 'ALTA' ? 'rec-box-value' : rec.primaryConfidence === 'CULEBRA' ? 'rec-box-culebra' : 'rec-box-model';
     if (compact) {
-      return `<div class="rec-box ${valueCls} compact">
-        <div class="rec-primary">${escapeHtml(rec.primaryAction)} <strong>${escapeHtml(rec.primaryBet)}</strong></div>
-        <div class="rec-detail">Marcador ${rec.likelyScore} · ${escapeHtml(rec.goalsPick)} · ${rec.expectedTotalGoals} goles esp.</div>
+      return `<div class="rec-box ${confCls} compact">
+        <div class="rec-primary">${escapeHtml(rec.primaryAction)} <strong>${escapeHtml(rec.primaryBet)}</strong>${rec.primaryOdds ? ` @ ${rec.primaryOdds.toFixed(2)}` : ''}</div>
+        <div class="rec-detail">${pct(rec.primaryProb)} conf. · Marcador ${rec.likelyScore} · ${escapeHtml(rec.goalsPick)} · ${escapeHtml(rec.firstGoalPick)}</div>
       </div>`;
     }
-    return `<div class="rec-box ${valueCls}">
-      <div class="rec-label">${rec.hasValueBet ? 'APUESTA RECOMENDADA (VALUE)' : 'PREDICCIÓN DEL MODELO'}</div>
+    const picksHtml = (rec.picks || []).slice(0, 6).map(p => `
+      <div class="rec-pick-row">
+        <span>${escapeHtml(p.label)}</span>
+        <span>${pct(p.prob)} · @ ${p.odds.toFixed(2)} <span class="rec-conf rec-conf-${p.confidence.toLowerCase()}">${p.confidence}</span></span>
+      </div>`).join('');
+    return `<div class="rec-box ${confCls}">
+      <div class="rec-label">APUESTA RECOMENDADA · ${rec.primaryConfidence || 'ANÁLISIS'}</div>
       <div class="rec-primary">${escapeHtml(rec.primaryAction)} <strong>${escapeHtml(rec.primaryBet)}</strong>
-        ${rec.primaryOdds ? `@ ${rec.primaryOdds.toFixed(2)}` : ''}</div>
+        ${rec.primaryOdds ? `@ ${rec.primaryOdds.toFixed(2)}` : ''} <span style="font-size:var(--text-sm);color:var(--color-text-muted)">(${pct(rec.primaryProb)})</span></div>
       <div class="rec-grid">
         <div><span class="rec-k">Ganador modelo</span><br>${escapeHtml(rec.modelWinner)} (${pct(rec.modelWinnerProb)})</div>
         <div><span class="rec-k">Marcador probable</span><br>${rec.likelyScore} (${pct(rec.likelyScoreProb)})</div>
         <div><span class="rec-k">Goles totales</span><br>${rec.expectedTotalGoals} esp. · ${escapeHtml(rec.goalsPick)}</div>
-        ${rec.hasValueBet ? `<div><span class="rec-k">EV / Kelly</span><br>${evFmt(rec.primaryEV)} · ${rec.primaryKelly ? euro(rec.primaryKelly.stakeSuggestion) : '—'}</div>` : ''}
+        <div><span class="rec-k">Primer gol</span><br>${escapeHtml(rec.firstGoalPick)} (${pct(rec.firstGoalProb)})</div>
+        ${rec.primaryKelly ? `<div><span class="rec-k">Kelly 1/4</span><br>${euro(rec.primaryKelly.stakeSuggestion)}</div>` : ''}
       </div>
+      ${picksHtml ? `<div class="rec-picks"><div class="rec-k" style="margin-bottom:var(--space-2)">Otras opciones del análisis</div>${picksHtml}</div>` : ''}
       <div class="rec-sources">Fuentes: ${rec.dataSources.map(escapeHtml).join(' · ')}</div>
     </div>`;
   }
@@ -487,7 +498,7 @@ class WorldBetAI {
       <h1 class="view-title">Dashboard</h1>
       <div class="kpi-grid">
         <div class="kpi-card"><div class="kpi-label">Partidos</div><div class="kpi-value" data-countup="${this.fixtures.length}">0</div></div>
-        <div class="kpi-card"><div class="kpi-label">Value Bets Hoy</div><div class="kpi-value" data-countup="${todayBets.length || this.valueBets.length}">0</div></div>
+        <div class="kpi-card"><div class="kpi-label">Apuestas Hoy</div><div class="kpi-value" data-countup="${todayBets.length || this.valueBets.length}">0</div></div>
         <div class="kpi-card"><div class="kpi-label">Precisión Modelo</div><div class="kpi-value" data-countup="${accuracy}" data-suffix="%" data-decimals="1">0</div></div>
         <div class="kpi-card"><div class="kpi-label">ROI Acumulado</div><div class="kpi-value" data-countup="12.4" data-suffix="%" data-decimals="1">0</div></div>
       </div>
@@ -507,16 +518,16 @@ class WorldBetAI {
           ` : '<div class="empty-state"><div class="empty-icon">⚽</div><p>No hay partidos próximos</p></div>'}
         </div>
         <div class="card">
-          <h2 class="card-title">Value Bets Destacadas</h2>
+          <h2 class="card-title">Apuestas Destacadas</h2>
           ${top3.length ? top3.map(v => {
             const rec = this.predictions[v.matchId]?.recommendation;
             return `
             <div style="padding:var(--space-3) 0;border-bottom:1px solid var(--color-divider)">
               <strong>${escapeHtml(v.match)}</strong><br>
-              <span class="value-high">${escapeHtml(v.market)} · EV ${evFmt(v.expectedValue)}</span>
+              <span class="value-high">${escapeHtml(v.market)} @ ${v.odds.toFixed(2)} · ${pct(v.prob)}</span>
               ${rec ? `<br><span style="font-size:var(--text-xs);color:var(--color-text-muted)">${escapeHtml(rec.summary)}</span>` : ''}
             </div>`;
-          }).join('') : '<div class="empty-state"><div class="empty-icon">📊</div><p>No hay value bets detectadas</p></div>'}
+          }).join('') : '<div class="empty-state"><div class="empty-icon">📊</div><p>No hay apuestas destacadas</p></div>'}
         </div>
       </div>
       <div class="card">
@@ -551,7 +562,7 @@ class WorldBetAI {
   renderMatchCard(f) {
     const pred = this.predictions[f.id];
     const rec = pred?.recommendation;
-    const hasValue = pred?.valueBets?.length > 0;
+    const hasPick = pred?.recommendation?.primaryBet;
     return `
       <article class="match-card">
         <div class="match-teams">
@@ -567,7 +578,7 @@ class WorldBetAI {
           ${f.group ? `<span class="badge badge-group">Grupo ${f.group}</span>` : ''}
           <span class="badge badge-group">${STAGE_LABELS[f.stage] || f.stage}</span>
           ${f.isPlaceholder ? '<span class="badge badge-tbd">Por definir</span>' : ''}
-          ${hasValue ? '<span class="badge badge-value">Value Bet</span>' : ''}
+          ${hasPick ? '<span class="badge badge-value">Apuesta lista</span>' : ''}
         </div>
         ${f.isPlaceholder
           ? '<p style="font-size:var(--text-sm);color:var(--color-text-muted)">Equipos por definir</p>'
@@ -578,21 +589,17 @@ class WorldBetAI {
 
   renderValueBets() {
     let bets = [...this.valueBets];
-    if (this.vbFilters.minEv > 0) bets = bets.filter(b => b.expectedValue >= this.vbFilters.minEv);
     if (this.vbFilters.confidence) bets = bets.filter(b => b.confidence === this.vbFilters.confidence);
     if (this.vbFilters.stage) bets = bets.filter(b => b.stage === this.vbFilters.stage);
     return `
-      <h1 class="view-title">Value Bets</h1>
+      <h1 class="view-title">Apuestas Recomendadas</h1>
+      <p style="color:var(--color-text-muted);margin-bottom:var(--space-4);font-size:var(--text-sm)">Basadas en el análisis Poisson + xG + datos de las APIs. No comparan value vs mercado.</p>
       <div class="filters">
-        <select id="vb-min-ev">
-          <option value="0">EV mínimo: cualquiera</option>
-          <option value="0.05" ${this.vbFilters.minEv===0.05?'selected':''}>EV ≥ 5%</option>
-          <option value="0.08" ${this.vbFilters.minEv===0.08?'selected':''}>EV ≥ 8%</option>
-        </select>
         <select id="vb-confidence">
           <option value="">Toda confianza</option>
-          <option value="HIGH" ${this.vbFilters.confidence==='HIGH'?'selected':''}>Alta</option>
-          <option value="MEDIUM" ${this.vbFilters.confidence==='MEDIUM'?'selected':''}>Media</option>
+          <option value="ALTA" ${this.vbFilters.confidence==='ALTA'?'selected':''}>Alta</option>
+          <option value="MEDIA" ${this.vbFilters.confidence==='MEDIA'?'selected':''}>Media</option>
+          <option value="CULEBRA" ${this.vbFilters.confidence==='CULEBRA'?'selected':''}>Culebra</option>
         </select>
         <button class="btn btn-outline" id="btn-export-csv"><i data-lucide="download"></i> Exportar CSV</button>
       </div>
@@ -601,7 +608,7 @@ class WorldBetAI {
           <table>
             <thead><tr>
               <th>Partido</th><th>Mercado</th><th>Cuota</th><th>Prob. Modelo</th>
-              <th>Edge</th><th>EV</th><th>Kelly</th><th>Acción</th>
+              <th>Confianza</th><th>Kelly</th><th>Tipo</th>
             </tr></thead>
             <tbody>${bets.map(b => `
               <tr>
@@ -609,14 +616,13 @@ class WorldBetAI {
                 <td>${escapeHtml(b.market)}</td>
                 <td>${b.odds.toFixed(2)}</td>
                 <td>${pct(b.prob)}</td>
-                <td class="${b.confidence==='HIGH'?'value-high':b.confidence==='MEDIUM'?'value-med':'value-low'}">${pct(b.edge)}</td>
-                <td class="value-high">${evFmt(b.expectedValue)}</td>
+                <td class="${b.confidence==='ALTA'?'value-high':b.confidence==='MEDIA'?'value-med':'value-low'}">${b.confidence}</td>
                 <td>${pct(b.kelly.recommendedBet)}</td>
-                <td>${b.recommendation}</td>
+                <td>${escapeHtml(b.type || '')}</td>
               </tr>
             `).join('')}</tbody>
           </table>
-        </div>` : '<div class="empty-state card"><div class="empty-icon">⚽</div><p>No hay value bets hoy</p></div>'}
+        </div>` : '<div class="empty-state card"><div class="empty-icon">⚽</div><p>No hay apuestas recomendadas</p></div>'}
     `;
   }
 
@@ -701,10 +707,9 @@ class WorldBetAI {
     if (teamFilter) teamFilter.addEventListener('input', e => { this.filters.team = e.target.value; this.render(); });
     const exportBtn = document.getElementById('btn-export-csv');
     if (exportBtn) exportBtn.addEventListener('click', () => this.exportCSV());
-    ['vb-min-ev','vb-confidence'].forEach(id => {
+    ['vb-confidence'].forEach(id => {
       const el = document.getElementById(id);
       if (el) el.addEventListener('change', e => {
-        if (id === 'vb-min-ev') this.vbFilters.minEv = parseFloat(e.target.value);
         if (id === 'vb-confidence') this.vbFilters.confidence = e.target.value;
         this.render();
       });
@@ -760,13 +765,13 @@ class WorldBetAI {
                 <p style="font-size:var(--text-xs);color:var(--color-text-muted)">Línea: ${d.lineMovement.direction} (${d.lineMovement.opening.toFixed(2)} → ${d.lineMovement.current.toFixed(2)})</p>
               </div>
             </div>
-            <h3 style="margin:var(--space-4) 0 var(--space-3)">Value Bets Detectadas</h3>
-            ${pred.valueBets.length ? pred.valueBets.map(v => `
+            <h3 style="margin:var(--space-4) 0 var(--space-3)">Apuestas del Análisis</h3>
+            ${pred.analysisPicks?.length ? pred.analysisPicks.map(v => `
               <div style="padding:var(--space-3);background:var(--color-surface-offset);border-radius:var(--radius-md);margin-bottom:var(--space-2)">
-                ${v.recommendation} <strong>${escapeHtml(v.market)}</strong> | EV: ${evFmt(v.expectedValue)} | Edge: ${pct(v.edge)}<br>
-                <span style="font-size:var(--text-sm)">Kelly 1/4: apostar ${pct(v.kelly.recommendedBet)} del bankroll (€${v.kelly.stakeSuggestion.toFixed(2)})</span>
+                <strong>${escapeHtml(v.label)}</strong> @ ${v.odds.toFixed(2)}<br>
+                <span style="font-size:var(--text-sm)">Prob. modelo: ${pct(v.prob)} · Confianza: ${v.confidence} · Kelly 1/4: ${pct(v.kelly.recommendedBet)} (€${v.kelly.stakeSuggestion.toFixed(2)})</span>
               </div>
-            `).join('') : '<p style="color:var(--color-text-muted)">Sin value bets para este partido</p>'}
+            `).join('') : '<p style="color:var(--color-text-muted)">Sin apuestas para este partido</p>'}
             <h3 style="margin:var(--space-4) 0 var(--space-3)">Estadísticas Comparativas</h3>
             <div class="grid-2">
               <div>
@@ -785,10 +790,10 @@ class WorldBetAI {
             <h3 style="margin:var(--space-4) 0 var(--space-3)">Configurar Apuesta</h3>
             <div class="filters">
               <input type="number" id="bet-bankroll" value="${this.config.bankroll}" aria-label="Bankroll">
-              <select id="bet-market">${pred.valueBets.length ? pred.valueBets.map((v,i) =>
-                `<option value="${i}" data-odds="${v.odds}" data-prob="${v.prob}">${escapeHtml(v.market)}</option>`
+              <select id="bet-market">${pred.analysisPicks?.length ? pred.analysisPicks.map((v,i) =>
+                `<option value="${i}" data-odds="${v.odds}" data-prob="${v.prob}">${escapeHtml(v.label)}</option>`
               ).join('') : `<option value="0" data-odds="${d.marketHomeOdds}" data-prob="${p.homeWin}">${escapeHtml(fixture.homeTeam)} gana</option>`}</select>
-              <input type="number" id="bet-odds" step="0.01" value="${pred.valueBets[0]?.odds || d.marketHomeOdds}" aria-label="Cuota">
+              <input type="number" id="bet-odds" step="0.01" value="${pred.analysisPicks?.[0]?.odds || d.marketHomeOdds}" aria-label="Cuota">
             </div>
             <p id="bet-result" style="margin-top:var(--space-3);font-weight:600"></p>
             <div class="chart-row">
@@ -853,20 +858,25 @@ class WorldBetAI {
     let answer = '';
     if (q.includes('empate')) {
       answer = `La probabilidad de empate es ${pct(p.draw)}. Cuota mercado: ${pred.data.marketDrawOdds.toFixed(2)}. `;
-      const vb = pred.valueBets.find(v => v.market === 'Empate');
-      answer += vb ? `EV positivo (${evFmt(vb.expectedValue)}). ${vb.recommendation}` : 'No detectamos value bet en empate.';
+      const pick = pred.analysisPicks?.find(v => v.label === 'Empate');
+      answer += pick ? `Recomendación del análisis: ${pick.label} (${pct(pick.prob)}).` : 'El modelo no destaca el empate como apuesta principal.';
     } else if (q.includes('marcador') || q.includes('resultado') || q.includes('score')) {
       answer = `Marcador más probable: ${p.mostLikelyScore.home}-${p.mostLikelyScore.away} (${pct(p.mostLikelyScore.probability)}). Top 5: ${p.top5Scores.map(s=>`${s.home}-${s.away}`).join(', ')}. Goles esperados totales: ${(p.expectedHomeGoals+p.expectedAwayGoals).toFixed(1)}.`;
-    } else if (q.includes('over') || q.includes('goles')) {
-      answer = `Probabilidad Over 2.5: ${pct(pred.over25Prob)}. xG combinado sugiere ${(pred.adjusted.adjustedHomeLambda+pred.adjusted.adjustedAwayLambda).toFixed(1)} goles esperados.`;
-    } else if (q.includes('apost') || q.includes('value') || q.includes('kelly')) {
-      if (pred.valueBets.length) {
-        answer = pred.valueBets.map(v =>
-          `${v.market}: prob ${pct(v.prob)}, cuota ${v.odds.toFixed(2)}, EV ${evFmt(v.expectedValue)}. Kelly: apostar €${v.kelly.stakeSuggestion.toFixed(2)}. ${v.recommendation}`
-        ).join(' | ');
-      } else answer = 'No hay value bets detectadas para este partido con el edge mínimo configurado.';
+    } else if (q.includes('over') || q.includes('goles') || q.includes('under')) {
+      answer = `Probabilidad Over 2.5: ${pct(pred.over25Prob)}. Under 2.5: ${pct(pred.under25Prob)}. xG combinado: ${(pred.adjusted.adjustedHomeLambda+pred.adjusted.adjustedAwayLambda).toFixed(1)} goles esperados. Recomendación: ${pred.recommendation.goalsPick}.`;
+    } else if (q.includes('primer gol') || q.includes('primero')) {
+      answer = `${pred.recommendation.firstGoalPick} (${pct(pred.recommendation.firstGoalProb)}).`;
+    } else if (q.includes('apost') || q.includes('recomend') || q.includes('kelly') || q.includes('culebra')) {
+      const rec = pred.recommendation;
+      answer = `Apuesta principal: ${rec.primaryBet} @ ${rec.primaryOdds?.toFixed(2)} (${pct(rec.primaryProb)}, ${rec.primaryConfidence}). `;
+      if (pred.analysisPicks?.length) {
+        answer += pred.analysisPicks.slice(0, 4).map(v =>
+          `${v.label}: ${pct(v.prob)} @ ${v.odds.toFixed(2)} (${v.confidence})`
+        ).join(' · ');
+      }
     } else {
-      answer = `Análisis ${fixture.homeTeam} vs ${fixture.awayTeam}: ${fixture.homeTeam} ${pct(p.homeWin)}, Empate ${pct(p.draw)}, ${fixture.awayTeam} ${pct(p.awayWin)}. Ranking FIFA #${pred.data.homeRanking} vs #${pred.data.awayRanking}. Forma reciente favorece ligeramente a ${pred.data.homeRanking < pred.data.awayRanking ? fixture.homeTeam : fixture.awayTeam}.`;
+      const rec = pred.recommendation;
+      answer = `Análisis ${fixture.homeTeam} vs ${fixture.awayTeam}: ${rec.summary}. Ranking FIFA #${pred.data.homeRanking} vs #${pred.data.awayRanking}.`;
     }
     document.getElementById('ai-response-area').innerHTML = `<div class="ai-response">${escapeHtml(answer)}</div>`;
     this.aiHistory.unshift({ match: `${fixture.homeTeam} vs ${fixture.awayTeam}`, q: question, a: answer });
@@ -958,16 +968,16 @@ class WorldBetAI {
   }
 
   exportCSV() {
-    const headers = ['Partido','Mercado','Cuota','ProbModelo','Edge','EV','Kelly','Confianza','Recomendacion'];
+    const headers = ['Partido','Mercado','Cuota','ProbModelo','Confianza','Kelly','Tipo'];
     const rows = this.valueBets.map(b => [
-      b.match, b.market, b.odds.toFixed(2), pct(b.prob), pct(b.edge),
-      evFmt(b.expectedValue), pct(b.kelly.recommendedBet), b.confidence, b.recommendation
+      b.match, b.market, b.odds.toFixed(2), pct(b.prob),
+      b.confidence, pct(b.kelly.recommendedBet), b.type || ''
     ]);
     const csv = [headers, ...rows].map(r => r.map(c => `"${String(c).replace(/"/g,'""')}"`).join(',')).join('\n');
     const blob = new Blob([csv], { type: 'text/csv;charset=utf-8;' });
     const a = document.createElement('a');
     a.href = URL.createObjectURL(blob);
-    a.download = `worldbet-value-bets-${new Date().toISOString().slice(0,10)}.csv`;
+    a.download = `worldbet-apuestas-${new Date().toISOString().slice(0,10)}.csv`;
     a.click();
     this.showToast('CSV exportado');
   }
