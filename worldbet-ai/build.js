@@ -232,5 +232,6 @@ ${wb}
 </body>
 </html>`;
 fs.writeFileSync(path.join(dir, 'worldbet-ai.html'), shell);
+fs.writeFileSync(path.join(dir, 'index.html'), shell);
 const lines = shell.split('\n').length;
-console.log('Built worldbet-ai.html with', lines, 'lines');
+console.log('Built worldbet-ai.html + index.html with', lines, 'lines');

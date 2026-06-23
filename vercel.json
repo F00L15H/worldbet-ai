@@ -1,0 +1,6 @@
+{
+  "buildCommand": "node worldbet-ai/build.js",
+  "outputDirectory": "worldbet-ai",
+  "installCommand": "echo \"static site — sin dependencias\"",
+  "framework": null
+}
