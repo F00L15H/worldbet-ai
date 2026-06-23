@@ -296,13 +296,12 @@ class WorldBetAI {
           stage: f.stage, date: f.kickoffUtc,
           market: pick.label, prob: pick.prob, odds: pick.odds,
           confidence: pick.confidence, type: pick.type,
-          culebraScore: pick.culebraScore,
           kelly: pick.kelly,
           recommendation: pred.recommendation
         });
       });
     }
-    this.valueBets.sort((a, b) => b.culebraScore - a.culebraScore);
+    this.valueBets.sort((a, b) => b.prob - a.prob);
   }
 
   refreshAllPredictions() {
@@ -312,10 +311,13 @@ class WorldBetAI {
   renderRecBox(rec, compact) {
     if (!rec) return '';
     const confCls = rec.primaryConfidence === 'ALTA' ? 'rec-box-value' : rec.primaryConfidence === 'CULEBRA' ? 'rec-box-culebra' : 'rec-box-model';
+    const goalsLine = rec.goalsNote
+      ? `${rec.expectedTotalGoals} esp. · ${escapeHtml(rec.goalsPick)} (${pct(rec.goalsPickProb)})`
+      : `${rec.expectedTotalGoals} esp. · ${escapeHtml(rec.goalsPick)}`;
     if (compact) {
       return `<div class="rec-box ${confCls} compact">
         <div class="rec-primary">${escapeHtml(rec.primaryAction)} <strong>${escapeHtml(rec.primaryBet)}</strong>${rec.primaryOdds ? ` @ ${rec.primaryOdds.toFixed(2)}` : ''}</div>
-        <div class="rec-detail">${pct(rec.primaryProb)} conf. · Marcador ${rec.likelyScore} · ${escapeHtml(rec.goalsPick)} · ${escapeHtml(rec.firstGoalPick)}</div>
+        <div class="rec-detail">${pct(rec.primaryProb)} · Marcador ${rec.likelyScore} · ${goalsLine}</div>
       </div>`;
     }
     const picksHtml = (rec.picks || []).slice(0, 6).map(p => `
@@ -327,13 +329,15 @@ class WorldBetAI {
       <div class="rec-label">APUESTA RECOMENDADA · ${rec.primaryConfidence || 'ANÁLISIS'}</div>
       <div class="rec-primary">${escapeHtml(rec.primaryAction)} <strong>${escapeHtml(rec.primaryBet)}</strong>
         ${rec.primaryOdds ? `@ ${rec.primaryOdds.toFixed(2)}` : ''} <span style="font-size:var(--text-sm);color:var(--color-text-muted)">(${pct(rec.primaryProb)})</span></div>
+      ${rec.primaryReason ? `<div class="rec-detail" style="margin-bottom:var(--space-2)">${escapeHtml(rec.primaryReason)}</div>` : ''}
       <div class="rec-grid">
         <div><span class="rec-k">Ganador modelo</span><br>${escapeHtml(rec.modelWinner)} (${pct(rec.modelWinnerProb)})</div>
         <div><span class="rec-k">Marcador probable</span><br>${rec.likelyScore} (${pct(rec.likelyScoreProb)})</div>
-        <div><span class="rec-k">Goles totales</span><br>${rec.expectedTotalGoals} esp. · ${escapeHtml(rec.goalsPick)}</div>
+        <div><span class="rec-k">Goles totales</span><br>${goalsLine}</div>
         <div><span class="rec-k">Primer gol</span><br>${escapeHtml(rec.firstGoalPick)} (${pct(rec.firstGoalProb)})</div>
         ${rec.primaryKelly ? `<div><span class="rec-k">Kelly 1/4</span><br>${euro(rec.primaryKelly.stakeSuggestion)}</div>` : ''}
       </div>
+      ${rec.goalsNote ? `<div class="rec-detail" style="margin:var(--space-2) 0;font-size:var(--text-xs)">ℹ️ ${escapeHtml(rec.goalsNote)}</div>` : ''}
       ${picksHtml ? `<div class="rec-picks"><div class="rec-k" style="margin-bottom:var(--space-2)">Otras opciones del análisis</div>${picksHtml}</div>` : ''}
       <div class="rec-sources">Fuentes: ${rec.dataSources.map(escapeHtml).join(' · ')}</div>
     </div>`;

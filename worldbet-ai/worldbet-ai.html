@@ -712,21 +712,61 @@ const PredictionEngine = {
     return picks;
   },
   /**
-   * Puntuación "culebra": prioriza probabilidad de acertar con cuota decente.
-   * No compara modelo vs mercado — busca la mejor opción para ganar según el análisis.
+   * Elige la apuesta principal de forma coherente con el análisis.
+   * Por defecto = ganador del modelo; solo cambia si otro mercado es mucho más claro.
    */
-  culebraScore(pick) {
-    const { prob, odds, type } = pick;
-    if (prob < 0.08 || !odds || odds < 1.35) return 0;
-    let score = Math.pow(prob, 1.5) * Math.min(odds, 8);
-    if (type === 'ganador' && prob >= 0.38) score *= 1.5;
-    if (type === 'marcador' && prob >= 0.10) score *= 1.25;
-    if (type === 'goles' && prob >= 0.55) score *= 1.3;
-    if (type === 'primer_gol' && prob >= 0.38) score *= 1.15;
-    if (type === 'doble_chance' && prob >= 0.58) score *= 1.1;
-    if (type === 'btts' && prob >= 0.52) score *= 1.05;
-    if (prob < 0.22 && type === 'ganador') score *= 0.35;
-    return score;
+  pickPrimaryBet(fixture, result, picks) {
+    const p = result.prediction;
+    const d = result.data;
+    const winners = [
+      { label: `${fixture.homeTeam} gana`, prob: p.homeWin, odds: d.marketHomeOdds, type: 'ganador' },
+      { label: 'Empate', prob: p.draw, odds: d.marketDrawOdds, type: 'ganador' },
+      { label: `${fixture.awayTeam} gana`, prob: p.awayWin, odds: d.marketAwayOdds, type: 'ganador' }
+    ].sort((a, b) => b.prob - a.prob);
+    const modelWinner = winners[0];
+    const enrich = (pick, reason) => ({
+      ...pick,
+      primaryReason: reason,
+      confidence: pick.confidence || this.pickConfidence(pick.prob)
+    });
+    const goalsPick = picks.find(x => x.label === (result.over25Prob >= result.under25Prob ? 'Over 2.5 goles' : 'Under 2.5 goles'));
+    const bttsYes = picks.find(x => x.label === 'Ambos marcan (Sí)');
+    const bttsNo = picks.find(x => x.label === 'Ambos marcan (No)');
+    const bttsPick = (bttsYes?.prob || 0) >= (bttsNo?.prob || 0) ? bttsYes : bttsNo;
+
+    if (goalsPick?.prob >= 0.65 && modelWinner.prob < 0.36) {
+      return enrich(goalsPick, 'Línea de goles muy clara en el análisis');
+    }
+    if (bttsPick?.prob >= 0.65 && modelWinner.prob < 0.34) {
+      return enrich(bttsPick, 'Ambos equipos marcan con alta probabilidad');
+    }
+
+    const winnerPick = picks.find(x => x.label === modelWinner.label) || {
+      ...modelWinner, type: 'ganador', confidence: this.pickConfidence(modelWinner.prob)
+    };
+    return enrich(winnerPick, 'Ganador más probable según Poisson + xG + APIs');
+  },
+  goalsAnalysis(result) {
+    const p = result.prediction;
+    const ms = p.mostLikelyScore;
+    const expected = p.expectedHomeGoals + p.expectedAwayGoals;
+    const msTotal = ms.home + ms.away;
+    const over = result.over25Prob;
+    const under = result.under25Prob;
+    const pickOver = over >= under;
+    const label = pickOver ? 'Over 2.5 goles' : 'Under 2.5 goles';
+    const prob = pickOver ? over : under;
+    let note = '';
+    if (msTotal <= 2 && pickOver && over < 0.62) {
+      note = `Promedio ${expected.toFixed(1)} goles esperados. El ${ms.home}-${ms.away} es el marcador más probable, pero sumando todos los resultados posibles el modelo inclina levemente a +2.5 (${pct(over)}).`;
+    } else if (msTotal >= 3 && !pickOver) {
+      note = `El ${ms.home}-${ms.away} sugiere muchos goles, pero la distribución completa favorece Under 2.5 (${pct(under)}).`;
+    } else if (pickOver) {
+      note = `${expected.toFixed(1)} goles esperados en total → ${label} (${pct(prob)}).`;
+    } else {
+      note = `${expected.toFixed(1)} goles esperados en total → ${label} (${pct(prob)}).`;
+    }
+    return { label, prob, expected: expected.toFixed(1), note };
   },
   buildFeatures(fixture, data, leagueAvg) {
     return {
@@ -761,10 +801,9 @@ const PredictionEngine = {
     const analysisPicks = this.buildAnalysisPicks(fixture, result);
     result.analysisPicks = analysisPicks.map(pick => ({
       ...pick,
-      culebraScore: this.culebraScore(pick),
       kelly: this.kellyCriterion(pick.prob, pick.odds, config.bankroll, config.kellyFraction)
-    })).sort((a, b) => b.culebraScore - a.culebraScore);
-    result.valueBets = result.analysisPicks.filter(p => p.culebraScore > 0).slice(0, 6);
+    })).sort((a, b) => b.prob - a.prob);
+    result.valueBets = result.analysisPicks.slice(0, 6);
     result.recommendation = this.buildRecommendation(fixture, result);
     return result;
   },
@@ -774,47 +813,47 @@ const PredictionEngine = {
   buildRecommendation(fixture, result) {
     const p = result.prediction;
     const ms = p.mostLikelyScore;
+    const picks = result.analysisPicks || [];
     const outcomes = [
       { label: `${fixture.homeTeam} gana`, prob: p.homeWin },
       { label: 'Empate', prob: p.draw },
       { label: `${fixture.awayTeam} gana`, prob: p.awayWin }
     ].sort((a, b) => b.prob - a.prob);
     const modelWinner = outcomes[0];
-    const goalsRec = result.over25Prob >= result.under25Prob
-      ? { label: 'Over 2.5 goles', prob: result.over25Prob }
-      : { label: 'Under 2.5 goles', prob: result.under25Prob };
+    const goals = this.goalsAnalysis(result);
     const fg = this.firstGoalProbability(result.adjusted.adjustedHomeLambda, result.adjusted.adjustedAwayLambda);
     const firstGoalPick = fg.homeFirst >= fg.awayFirst
       ? { label: `Primer gol: ${fixture.homeTeam}`, prob: fg.homeFirst }
       : { label: `Primer gol: ${fixture.awayTeam}`, prob: fg.awayFirst };
-    const ranked = result.analysisPicks || [];
-    const primary = ranked[0] || {
-      label: modelWinner.label, prob: modelWinner.prob,
-      odds: result.data.marketHomeOdds, type: 'ganador', confidence: 'MEDIA'
-    };
-    const secondary = ranked.slice(1, 5);
+    const primary = this.pickPrimaryBet(fixture, result, picks);
+    const primaryKelly = picks.find(x => x.label === primary.label)?.kelly
+      || this.kellyCriterion(primary.prob, primary.odds, result.data.bankroll || 1000, 0.25);
+    const altPicks = picks
+      .filter(pick => pick.label !== primary.label)
+      .slice(0, 6);
     return {
       modelWinner: modelWinner.label,
       modelWinnerProb: modelWinner.prob,
       likelyScore: `${ms.home}-${ms.away}`,
       likelyScoreProb: ms.probability,
-      expectedTotalGoals: (p.expectedHomeGoals + p.expectedAwayGoals).toFixed(1),
-      goalsPick: goalsRec.label,
-      goalsPickProb: goalsRec.prob,
+      expectedTotalGoals: goals.expected,
+      goalsPick: goals.label,
+      goalsPickProb: goals.prob,
+      goalsNote: goals.note,
       firstGoalPick: firstGoalPick.label,
       firstGoalProb: firstGoalPick.prob,
       primaryBet: primary.label,
       primaryAction: '🎯 Apuesta recomendada',
+      primaryReason: primary.primaryReason,
       primaryType: primary.type,
       primaryProb: primary.prob,
       primaryOdds: primary.odds,
       primaryConfidence: primary.confidence,
-      primaryKelly: primary.kelly,
+      primaryKelly,
       hasValueBet: false,
-      picks: ranked.slice(0, 8),
-      secondary,
+      picks: altPicks,
       dataSources: result.data.dataSources || ['Demo'],
-      summary: `${primary.label} (${pct(primary.prob)}) @ ${primary.odds?.toFixed(2)} · Marcador ${ms.home}-${ms.away} · ${goalsRec.label} · ${firstGoalPick.label}`
+      summary: `${primary.label} (${pct(primary.prob)}) @ ${primary.odds?.toFixed(2)} · Marcador ${ms.home}-${ms.away} · ${goals.label} · ${firstGoalPick.label}`
     };
   }
 };
@@ -1254,13 +1293,12 @@ class WorldBetAI {
           stage: f.stage, date: f.kickoffUtc,
           market: pick.label, prob: pick.prob, odds: pick.odds,
           confidence: pick.confidence, type: pick.type,
-          culebraScore: pick.culebraScore,
           kelly: pick.kelly,
           recommendation: pred.recommendation
         });
       });
     }
-    this.valueBets.sort((a, b) => b.culebraScore - a.culebraScore);
+    this.valueBets.sort((a, b) => b.prob - a.prob);
   }
 
   refreshAllPredictions() {
@@ -1270,10 +1308,13 @@ class WorldBetAI {
   renderRecBox(rec, compact) {
     if (!rec) return '';
     const confCls = rec.primaryConfidence === 'ALTA' ? 'rec-box-value' : rec.primaryConfidence === 'CULEBRA' ? 'rec-box-culebra' : 'rec-box-model';
+    const goalsLine = rec.goalsNote
+      ? `${rec.expectedTotalGoals} esp. · ${escapeHtml(rec.goalsPick)} (${pct(rec.goalsPickProb)})`
+      : `${rec.expectedTotalGoals} esp. · ${escapeHtml(rec.goalsPick)}`;
     if (compact) {
       return `<div class="rec-box ${confCls} compact">
         <div class="rec-primary">${escapeHtml(rec.primaryAction)} <strong>${escapeHtml(rec.primaryBet)}</strong>${rec.primaryOdds ? ` @ ${rec.primaryOdds.toFixed(2)}` : ''}</div>
-        <div class="rec-detail">${pct(rec.primaryProb)} conf. · Marcador ${rec.likelyScore} · ${escapeHtml(rec.goalsPick)} · ${escapeHtml(rec.firstGoalPick)}</div>
+        <div class="rec-detail">${pct(rec.primaryProb)} · Marcador ${rec.likelyScore} · ${goalsLine}</div>
       </div>`;
     }
     const picksHtml = (rec.picks || []).slice(0, 6).map(p => `
@@ -1285,13 +1326,15 @@ class WorldBetAI {
       <div class="rec-label">APUESTA RECOMENDADA · ${rec.primaryConfidence || 'ANÁLISIS'}</div>
       <div class="rec-primary">${escapeHtml(rec.primaryAction)} <strong>${escapeHtml(rec.primaryBet)}</strong>
         ${rec.primaryOdds ? `@ ${rec.primaryOdds.toFixed(2)}` : ''} <span style="font-size:var(--text-sm);color:var(--color-text-muted)">(${pct(rec.primaryProb)})</span></div>
+      ${rec.primaryReason ? `<div class="rec-detail" style="margin-bottom:var(--space-2)">${escapeHtml(rec.primaryReason)}</div>` : ''}
       <div class="rec-grid">
         <div><span class="rec-k">Ganador modelo</span><br>${escapeHtml(rec.modelWinner)} (${pct(rec.modelWinnerProb)})</div>
         <div><span class="rec-k">Marcador probable</span><br>${rec.likelyScore} (${pct(rec.likelyScoreProb)})</div>
-        <div><span class="rec-k">Goles totales</span><br>${rec.expectedTotalGoals} esp. · ${escapeHtml(rec.goalsPick)}</div>
+        <div><span class="rec-k">Goles totales</span><br>${goalsLine}</div>
         <div><span class="rec-k">Primer gol</span><br>${escapeHtml(rec.firstGoalPick)} (${pct(rec.firstGoalProb)})</div>
         ${rec.primaryKelly ? `<div><span class="rec-k">Kelly 1/4</span><br>${euro(rec.primaryKelly.stakeSuggestion)}</div>` : ''}
       </div>
+      ${rec.goalsNote ? `<div class="rec-detail" style="margin:var(--space-2) 0;font-size:var(--text-xs)">ℹ️ ${escapeHtml(rec.goalsNote)}</div>` : ''}
       ${picksHtml ? `<div class="rec-picks"><div class="rec-k" style="margin-bottom:var(--space-2)">Otras opciones del análisis</div>${picksHtml}</div>` : ''}
       <div class="rec-sources">Fuentes: ${rec.dataSources.map(escapeHtml).join(' · ')}</div>
     </div>`;
