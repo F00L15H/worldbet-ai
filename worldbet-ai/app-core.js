@@ -195,20 +195,30 @@ class ApiClient {
       }
     }
   }
-  async fetchApi(url, options = {}, { useProxy = false, ttlMs = 0, demoFallback = null } = {}) {
+  async fetchApiOnce(url, options, useProxy) {
     const finalUrl = this.buildUrl(url, useProxy);
-    const key = this.cacheKey(finalUrl, options);
+    return this.enqueue(() => this.fetchWithRetry(finalUrl, options));
+  }
+  /**
+   * useProxy=true → intenta directo primero (CORS del navegador); proxy solo como fallback.
+   * corsproxy.io gratis no funciona en producción (Vercel), pero TheStats/Odds sí permiten CORS directo.
+   */
+  async fetchApi(url, options = {}, { useProxy = false, ttlMs = 0, demoFallback = null } = {}) {
+    const key = this.cacheKey(url, options);
     if (ttlMs > 0) {
       const cached = this.getCached(key, ttlMs);
       if (cached) return cached;
     }
-    try {
-      const data = await this.enqueue(() => this.fetchWithRetry(finalUrl, options));
-      if (ttlMs > 0) this.setCache(key, data);
-      return data;
-    } catch {
-      return demoFallback;
+    const attempts = useProxy ? [false, true] : [false];
+    for (const viaProxy of attempts) {
+      if (viaProxy && !this.config.corsProxy?.trim()) continue;
+      try {
+        const data = await this.fetchApiOnce(url, options, viaProxy);
+        if (ttlMs > 0) this.setCache(key, data);
+        return data;
+      } catch { /* siguiente intento */ }
     }
+    return demoFallback;
   }
   async loadAllFixtures() {
     const data = await this.fetchApi(FIXTURES_URL, {}, { ttlMs: 60 * 60 * 1000 });
@@ -278,7 +288,8 @@ class ApiClient {
     const d = await this.fetchApi(`${THESTATSAPI_BASE}/health`, {
       headers: { Authorization: `Bearer ${this.config.thestatsapiKey}` }
     }, { useProxy: true, ttlMs: 0 });
-    return { ok: !!d?.status, msg: d?.status || 'Error' };
+    const ok = d?.status === 'healthy';
+    return { ok, msg: ok ? 'healthy' : (d?.status || 'Sin respuesta') };
   }
   async testWorldCupApi() {
     if (!this.config.worldcupApiKey) return { ok: false, msg: 'Sin API key' };
