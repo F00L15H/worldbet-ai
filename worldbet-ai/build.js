@@ -275,7 +275,7 @@ ${mobilePwaCss}
         </div>
         <div class="api-status" id="api-status" role="status" aria-live="polite" title="Estado de verificación de APIs">
           <span class="api-dot" id="api-dot" aria-hidden="true"></span>
-          <span id="api-status-text">DEMO</span>
+          <span id="api-status-text">MODELO</span>
         </div>
         <div id="auth-header"></div>
         <span class="bankroll-chip" id="bankroll-quick" aria-label="Bankroll virtual">$ 1.000.000</span>
@@ -298,7 +298,7 @@ ${mobilePwaCss}
     </div>
     <footer class="footer-bar" role="contentinfo">
       <span id="footer-update">Cargando...</span>
-      <span id="footer-mode">Modo: DEMO</span>
+      <span id="footer-mode">Modo: modelo Poisson</span>
     </footer>
     <nav class="bottom-nav" id="bottom-nav" aria-label="Navegación móvil">
       <button type="button" class="bottom-nav-item active" data-view="dashboard" data-bottom-nav><i data-lucide="home"></i><span>Inicio</span></button>

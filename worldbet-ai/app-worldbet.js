@@ -46,6 +46,7 @@ class WorldBetAI {
     this.oddsLive = new OddsLiveManager(this);
     this.authModalOpen = false;
     this.betFilter = '';
+    this.predictionsLoading = false;
   }
 
   hasConfiguredKeys() {
@@ -112,35 +113,58 @@ class WorldBetAI {
   saveSessionPrefs() {}
 
   async init() {
-    this.loadSessionPrefs();
-    this.bindEvents();
-    this.updateBankrollDisplay();
-    if (SupabaseClient.isConfigured()) {
-      await this.auth.init();
-      this.updateAuthHeader();
+    try {
+      this.loadSessionPrefs();
+      this.bindEvents();
+      this.updateBankrollDisplay();
+      if (SupabaseClient.isConfigured()) {
+        await this.auth.init();
+        this.updateAuthHeader();
+      }
+      await this.loadAllFixtures();
+      this.navigate('dashboard');
+      this.updateFooter();
+      this.startCountdown();
+      this.registerServiceWorker();
+      this.showIosInstallBanner();
+      void this.bootstrapData();
+    } catch (err) {
+      console.error('init', err);
+      this.error = err.message || 'Error al iniciar la aplicación';
+      this.loading = false;
+      this.navigate('dashboard');
+      this.showToast(this.error);
     }
-    await this.loadAllFixtures();
-    if (SupabaseClient.isConfigured()) {
-      await this.bets.syncMatchesFromServer().catch(() => {});
-      await this.bets.upsertMatches(this.fixtures).catch(() => {});
-      const dbMatches = await this.bets.loadDbMatches();
-      this.fixtures = this.bets.mergeDbStatusIntoFixtures(this.fixtures, dbMatches);
-      if (this.auth.isLoggedIn) await this.bets.loadUserBets();
-      await this.oddsLive.init();
-      await this.refreshModelAccuracy();
+  }
+
+  async bootstrapData() {
+    this.predictionsLoading = true;
+    if (['dashboard', 'today', 'groups', 'knockout', 'valuebets'].includes(this.currentView)) this.render();
+    try {
+      if (SupabaseClient.isConfigured()) {
+        await this.bets.syncMatchesFromServer().catch(() => {});
+        await this.bets.upsertMatches(this.fixtures).catch(() => {});
+        const dbMatches = await this.bets.loadDbMatches();
+        this.fixtures = this.bets.mergeDbStatusIntoFixtures(this.fixtures, dbMatches);
+        if (this.auth.isLoggedIn) await this.bets.loadUserBets();
+        await this.oddsLive.init();
+        await this.refreshModelAccuracy();
+      }
+      if (this.hasConfiguredKeys()) {
+        await this.runApiValidation();
+        if (!this.apiTrust.trusted) await this.computeAllPredictions();
+      } else {
+        await this.computeAllPredictions();
+      }
+      this.updateFooter();
+      this.startCountdown();
+    } catch (err) {
+      console.error('bootstrapData', err);
+      this.showToast(err.message || 'Error al cargar predicciones');
+    } finally {
+      this.predictionsLoading = false;
+      this.render();
     }
-    if (this.hasConfiguredKeys()) {
-      this.apiClient = new ApiClient(this.config);
-      await this.runApiValidation();
-      if (!this.apiTrust.trusted) await this.computeAllPredictions();
-    } else {
-      await this.computeAllPredictions();
-    }
-    this.navigate('dashboard');
-    this.updateFooter();
-    this.startCountdown();
-    this.registerServiceWorker();
-    this.showIosInstallBanner();
   }
 
   registerServiceWorker() {
@@ -783,12 +807,14 @@ class WorldBetAI {
     const dot = document.getElementById('api-dot');
     const text = document.getElementById('api-status-text');
     const container = document.getElementById('api-status');
+    const footer = document.getElementById('footer-mode');
     if (!dot || !text || !container) return;
 
     let dotClass = 'api-dot';
-    let label = 'DEMO';
-    let title = 'Datos simulados. Configura tus API keys y pulsa Probar APIs.';
+    let label = 'MODELO';
+    let title = 'Predicciones con modelo Poisson + xG.';
     container.className = 'api-status';
+    container.style.display = '';
 
     if (this.apiTrust.testing) {
       dotClass += ' pending';
@@ -815,6 +841,9 @@ class WorldBetAI {
       this.demoMode = true;
     } else {
       this.demoMode = true;
+      container.style.display = 'none';
+      if (footer) footer.textContent = 'Modo: modelo Poisson';
+      return;
     }
 
     if (this.error) {
@@ -829,13 +858,12 @@ class WorldBetAI {
     container.title = title;
     container.setAttribute('aria-label', title);
 
-    const footer = document.getElementById('footer-mode');
     if (footer) {
       footer.textContent = this.apiTrust.trusted
         ? `Modo: LIVE VERIFICADO · ${this.apiTrust.validCount} API(s)`
         : this.hasConfiguredKeys() && !this.apiTrust.tested
-          ? 'Modo: DEMO (sin verificar)'
-          : 'Modo: DEMO';
+          ? 'Modo: sin verificar'
+          : 'Modo: modelo Poisson';
     }
   }
 
@@ -955,6 +983,7 @@ class WorldBetAI {
     );
     return `
       <h1 class="view-title">Dashboard</h1>
+      ${this.predictionsLoading ? '<p style="color:var(--color-text-muted);font-size:var(--text-sm);margin-bottom:var(--space-4)">Calculando predicciones del modelo…</p>' : ''}
       <div style="margin-bottom:var(--space-4)">${trustChip}</div>
       ${!SupabaseClient.isConfigured() ? '<p style="color:var(--color-warning);margin-bottom:var(--space-4);font-size:var(--text-sm)">Configura Supabase en el build para guardar apuestas y usuarios.</p>' : ''}
       <div class="kpi-grid">
@@ -1757,5 +1786,10 @@ class WorldBetAI {
 let app;
 document.addEventListener('DOMContentLoaded', () => {
   app = new WorldBetAI();
-  app.init();
+  app.init().catch(err => {
+    console.error('init failed', err);
+    app.error = err?.message || 'Error al iniciar';
+    app.loading = false;
+    app.navigate('dashboard');
+  });
 });
