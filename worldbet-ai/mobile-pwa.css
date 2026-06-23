@@ -1,0 +1,148 @@
+/* PWA + iPhone native feel */
+:root {
+  --header-h: 56px;
+  --bottom-nav-h: 64px;
+  --safe-top: env(safe-area-inset-top, 0px);
+  --safe-bottom: env(safe-area-inset-bottom, 0px);
+}
+
+html { -webkit-text-size-adjust: 100%; }
+body {
+  min-height: 100dvh;
+  overscroll-behavior: none;
+  -webkit-tap-highlight-color: transparent;
+  padding-top: var(--safe-top);
+}
+
+.app {
+  min-height: 100dvh;
+  padding-bottom: calc(var(--bottom-nav-h) + var(--safe-bottom));
+}
+
+button, .btn, .nav-item, .bottom-nav-item { touch-action: manipulation; }
+
+input, select, textarea, .filters input, .filters select, .form-group input, .form-group select {
+  font-size: 16px !important;
+}
+
+/* Odds chips & live flash */
+.odds-row { display: flex; gap: var(--space-2); flex-wrap: wrap; margin: var(--space-3) 0; }
+.odds-chip {
+  flex: 1; min-width: 72px; text-align: center; padding: var(--space-2) var(--space-1);
+  background: var(--color-surface-offset); border: 1px solid var(--color-border);
+  border-radius: var(--radius-md); font-size: var(--text-xs);
+}
+.odds-chip strong { display: block; font-family: var(--font-display); font-size: var(--text-base); color: var(--color-text); }
+.odds-chip .odds-lbl { color: var(--color-text-muted); font-size: 10px; text-transform: uppercase; }
+.odds-chip.odds-flash-up { animation: oddsUp 1.5s ease; border-color: var(--color-success); }
+.odds-chip.odds-flash-down { animation: oddsDown 1.5s ease; border-color: var(--color-error); }
+.odds-chip .odds-arrow { font-size: 10px; margin-left: 2px; }
+@keyframes oddsUp { 0%,100% { background: var(--color-surface-offset); } 30% { background: rgba(0,200,83,0.25); } }
+@keyframes oddsDown { 0%,100% { background: var(--color-surface-offset); } 30% { background: rgba(244,67,54,0.2); } }
+
+.odds-live-badge {
+  display: flex; align-items: center; gap: 6px; font-size: 10px; color: var(--color-text-muted);
+  padding: 4px 8px; border-radius: var(--radius-full); border: 1px solid var(--color-border);
+  white-space: nowrap;
+}
+.odds-live-dot { width: 6px; height: 6px; border-radius: 50%; background: var(--color-success); animation: pulse 2s infinite; }
+
+.rec-odds-big { font-family: var(--font-display); font-size: var(--text-xl); color: var(--color-gold); font-weight: 700; }
+
+/* Bottom navigation (mobile) */
+.bottom-nav {
+  display: none; position: fixed; bottom: 0; left: 0; right: 0; z-index: 110;
+  height: calc(var(--bottom-nav-h) + var(--safe-bottom));
+  padding-bottom: var(--safe-bottom);
+  background: var(--color-surface); border-top: 1px solid var(--color-border);
+  grid-template-columns: repeat(4, 1fr); align-items: stretch;
+}
+.bottom-nav-item {
+  display: flex; flex-direction: column; align-items: center; justify-content: center;
+  gap: 2px; font-size: 10px; color: var(--color-text-muted); min-height: 44px;
+  padding: var(--space-1); transition: var(--transition-interactive);
+}
+.bottom-nav-item i, .bottom-nav-item svg { width: 22px; height: 22px; }
+.bottom-nav-item.active { color: var(--color-primary); font-weight: 600; }
+
+/* Mobile cards for tables */
+.bet-card, .vb-card {
+  background: var(--color-surface); border: 1px solid var(--color-border);
+  border-radius: var(--radius-lg); padding: var(--space-4); margin-bottom: var(--space-3);
+}
+.bet-card-row { display: flex; justify-content: space-between; font-size: var(--text-sm); margin: var(--space-1) 0; }
+.bet-card-row span:first-child { color: var(--color-text-muted); }
+
+/* Install banner */
+.install-banner {
+  position: fixed; bottom: calc(var(--bottom-nav-h) + var(--safe-bottom) + 8px);
+  left: var(--space-4); right: var(--space-4); z-index: 120;
+  background: var(--color-surface); border: 1px solid var(--color-primary);
+  border-radius: var(--radius-lg); padding: var(--space-3) var(--space-4);
+  box-shadow: var(--shadow-lg); font-size: var(--text-sm);
+}
+.install-banner button { margin-top: var(--space-2); }
+
+/* Chart accordion (mobile modal) */
+.chart-accordion summary {
+  cursor: pointer; font-weight: 600; padding: var(--space-3) 0;
+  list-style: none; display: flex; justify-content: space-between; align-items: center;
+}
+.chart-accordion summary::-webkit-details-marker { display: none; }
+
+@media (max-width: 768px) {
+  .bottom-nav { display: grid; }
+  .sidebar, .hamburger, .sidebar-overlay { display: none !important; }
+  .footer-bar { display: none; }
+  .layout { flex-direction: column; }
+  .main {
+    padding: var(--space-3) var(--space-4);
+    padding-bottom: var(--space-4);
+    max-width: 100%;
+  }
+  .header {
+    padding: var(--space-2) var(--space-3);
+    gap: var(--space-2);
+    min-height: var(--header-h);
+  }
+  .logo svg { width: 32px; height: 32px; }
+  .logo-text { font-size: var(--text-base); }
+  #api-status-text { display: none; }
+  .api-status { padding: var(--space-1); min-width: auto; }
+  .bankroll-input { width: 72px; font-size: 14px !important; padding: 6px 8px; }
+  #auth-header span { display: none; }
+  .kpi-grid { grid-template-columns: repeat(2, 1fr); gap: var(--space-3); }
+  .kpi-value { font-size: var(--text-xl); }
+  .grid-2 { grid-template-columns: 1fr; }
+  .match-grid { grid-template-columns: 1fr; }
+  .view-title { font-size: var(--text-lg); margin-bottom: var(--space-4); }
+  .table-wrap.desktop-only { display: none; }
+  .mobile-cards { display: block; }
+  .toast {
+    left: var(--space-4); right: var(--space-4); bottom: calc(var(--bottom-nav-h) + var(--safe-bottom) + 12px);
+  }
+  .modal-overlay { padding: 0; align-items: stretch; }
+  .modal {
+    max-width: 100%; margin: 0; min-height: 100dvh; border-radius: 0;
+    border: none; display: flex; flex-direction: column;
+  }
+  .modal-body {
+    flex: 1; overflow-y: auto; padding: var(--space-4);
+    padding-bottom: calc(var(--space-6) + var(--safe-bottom));
+  }
+  .modal-header { padding: var(--space-3) var(--space-4); padding-top: calc(var(--space-3) + var(--safe-top)); }
+  .chart-row { grid-template-columns: 1fr; }
+  .filters select, .filters input { flex: 1 1 calc(50% - var(--space-2)); min-width: 140px; }
+  .team { font-size: var(--text-xs); }
+  .team img { width: 24px; height: 17px; }
+}
+
+@media (min-width: 769px) {
+  .mobile-cards { display: none; }
+  .bottom-nav, .install-banner { display: none !important; }
+  .app { padding-bottom: 0; }
+}
+
+@media (display-mode: standalone) {
+  .install-banner { display: none !important; }
+}

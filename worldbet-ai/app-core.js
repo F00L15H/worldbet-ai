@@ -627,6 +627,61 @@ const PredictionEngine = {
   }
 };
 
+// ========== BET SETTLEMENT ==========
+const BetSettlement = {
+  settleBet(marketType, marketLabel, homeTeam, awayTeam, homeScore, awayScore) {
+    const total = homeScore + awayScore;
+    const homeWins = homeScore > awayScore;
+    const awayWins = awayScore > homeScore;
+    const isDraw = homeScore === awayScore;
+    const bothScored = homeScore > 0 && awayScore > 0;
+    const label = String(marketLabel || '').trim();
+
+    switch (marketType) {
+      case 'ganador': {
+        if (/empate/i.test(label)) return isDraw ? 'won' : 'lost';
+        if (label.includes(homeTeam)) return homeWins ? 'won' : 'lost';
+        if (label.includes(awayTeam)) return awayWins ? 'won' : 'lost';
+        return 'void';
+      }
+      case 'doble_chance': {
+        if (label.includes(homeTeam) && /empate/i.test(label)) return (homeWins || isDraw) ? 'won' : 'lost';
+        if (label.includes(awayTeam) && /empate/i.test(label)) return (awayWins || isDraw) ? 'won' : 'lost';
+        return 'void';
+      }
+      case 'goles': {
+        const overM = label.match(/Over\s+([\d.]+)/i);
+        const underM = label.match(/Under\s+([\d.]+)/i);
+        if (overM) return total > parseFloat(overM[1]) ? 'won' : 'lost';
+        if (underM) return total < parseFloat(underM[1]) ? 'won' : 'lost';
+        return 'void';
+      }
+      case 'btts': {
+        if (/sí|si/i.test(label)) return bothScored ? 'won' : 'lost';
+        if (/no/i.test(label)) return !bothScored ? 'won' : 'lost';
+        return 'void';
+      }
+      case 'marcador': {
+        const sm = label.match(/(\d+)\s*-\s*(\d+)/);
+        if (sm) return (homeScore === parseInt(sm[1], 10) && awayScore === parseInt(sm[2], 10)) ? 'won' : 'lost';
+        return 'void';
+      }
+      case 'primer_gol': {
+        if (homeScore === 0 && awayScore === 0) return 'void';
+        if (label.includes(homeTeam)) return homeScore > 0 && awayScore === 0 ? 'won' : (homeScore > awayScore ? 'won' : 'lost');
+        if (label.includes(awayTeam)) return awayScore > 0 && homeScore === 0 ? 'won' : (awayScore > homeScore ? 'won' : 'lost');
+        return 'void';
+      }
+      default:
+        return 'void';
+    }
+  },
+  calcPayout(stake, odds, result) {
+    if (result === 'won') return stake * (odds - 1);
+    return 0;
+  }
+};
+
 // ========== CHART MANAGER ==========
 const ChartManager = {
   instances: {},

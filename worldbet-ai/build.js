@@ -1,17 +1,60 @@
 const fs = require('fs');
 const path = require('path');
+const { execSync } = require('child_process');
 const dir = __dirname;
+
+function loadEnv() {
+  const envPath = path.join(dir, '..', '.env');
+  const vars = {};
+  if (fs.existsSync(envPath)) {
+    fs.readFileSync(envPath, 'utf8').split(/\r?\n/).forEach(line => {
+      const trimmed = line.trim();
+      if (!trimmed || trimmed.startsWith('#')) return;
+      const m = trimmed.match(/^([^=]+)=(.*)$/);
+      if (m) vars[m[1].trim()] = m[2].trim().replace(/^["']|["']$/g, '');
+    });
+  }
+  return {
+    supabaseUrl: process.env.SUPABASE_URL || vars.SUPABASE_URL || '',
+    supabaseAnonKey: process.env.SUPABASE_ANON_KEY || vars.SUPABASE_ANON_KEY || '',
+    thestatsapiKey: process.env.THESTATSAPI_KEY || vars.THESTATSAPI_KEY || '',
+    oddsApiKey: process.env.ODDS_API_KEY || vars.ODDS_API_KEY || '',
+    apifootballKey: process.env.APIFOOTBALL_KEY || vars.APIFOOTBALL_KEY || '',
+    worldcupApiKey: process.env.WORLDCUP_API_KEY || vars.WORLDCUP_API_KEY || ''
+  };
+}
+
+const env = loadEnv();
 const core = fs.readFileSync(path.join(dir, 'app-core.js'), 'utf8');
+const supabaseJs = fs.readFileSync(path.join(dir, 'app-supabase.js'), 'utf8');
+const authJs = fs.readFileSync(path.join(dir, 'app-auth.js'), 'utf8');
+const betsJs = fs.readFileSync(path.join(dir, 'app-bets.js'), 'utf8');
+const oddsLiveJs = fs.readFileSync(path.join(dir, 'app-odds-live.js'), 'utf8');
 const wb = fs.readFileSync(path.join(dir, 'app-worldbet.js'), 'utf8');
+const mobilePwaCss = fs.readFileSync(path.join(dir, 'mobile-pwa.css'), 'utf8');
+
+const configScript = `window.SUPABASE_CONFIG = ${JSON.stringify({ url: env.supabaseUrl, anonKey: env.supabaseAnonKey })};\nwindow.API_KEYS = ${JSON.stringify({
+  thestatsapi: env.thestatsapiKey,
+  apifootball: env.apifootballKey,
+  worldcup: env.worldcupApiKey
+})};`;
 const shell = `<!DOCTYPE html>
 <html lang="es" data-theme="dark">
 <head>
   <meta charset="UTF-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+  <meta name="apple-mobile-web-app-title" content="WorldBet">
+  <meta name="theme-color" content="#0d0f14">
+  <meta name="mobile-web-app-capable" content="yes">
+  <link rel="manifest" href="/manifest.webmanifest">
+  <link rel="apple-touch-icon" href="/icons/apple-touch-icon.png">
   <title>WorldBet AI — Predicciones Mundial 2026</title>
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=Oswald:wght@300;400;500;600;700&family=Inter:wght@300..700&display=swap" rel="stylesheet">
+  <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
   <script src="https://unpkg.com/lucide@latest/dist/umd/lucide.min.js"></script>
   <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js"></script>
   <script src="https://cdnjs.cloudflare.com/ajax/libs/countup.js/2.8.0/countUp.umd.js"></script>
@@ -103,6 +146,11 @@ const shell = `<!DOCTYPE html>
     .btn-primary:hover { background: var(--color-primary-hover); }
     .btn-outline { border: 1px solid var(--color-border); color: var(--color-text); background: transparent; }
     .btn-outline:hover { background: var(--color-surface-offset); }
+    .btn-sm { min-height: 36px; padding: var(--space-2) var(--space-3); font-size: var(--text-xs); }
+    .auth-tabs { display: flex; gap: var(--space-2); margin-bottom: var(--space-4); }
+    .auth-tab { flex: 1; padding: var(--space-2); border-radius: var(--radius-md); border: 1px solid var(--color-border); background: var(--color-surface-offset); color: var(--color-text-muted); font-weight: 600; min-height: 40px; }
+    .auth-tab.active { background: var(--color-primary-highlight); color: var(--color-primary); border-color: var(--color-primary); }
+    #auth-header { display: flex; align-items: center; gap: var(--space-2); }
     .filters { display: flex; flex-wrap: wrap; gap: var(--space-3); margin-bottom: var(--space-4); }
     .filters select, .filters input { padding: var(--space-2) var(--space-3); background: var(--color-surface-offset); border: 1px solid var(--color-border); border-radius: var(--radius-md); color: var(--color-text); min-height: 44px; }
     .match-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(320px, 1fr)); gap: var(--space-4); }
@@ -188,6 +236,7 @@ const shell = `<!DOCTYPE html>
       .header { padding: var(--space-3) var(--space-4); }
       .prob-grid { grid-template-columns: 1fr; }
     }
+${mobilePwaCss}
   </style>
 </head>
 <body>
@@ -204,10 +253,15 @@ const shell = `<!DOCTYPE html>
         <span class="logo-text">World<span>Bet</span> AI</span>
       </a>
       <div class="header-actions">
+        <div class="odds-live-badge" id="odds-live-badge" style="display:none" title="Cuotas sincronizadas desde el servidor">
+          <span class="odds-live-dot" aria-hidden="true"></span>
+          <span class="odds-live-label">Cuotas</span>
+        </div>
         <div class="api-status" id="api-status" role="status" aria-live="polite" title="Estado de verificación de APIs">
           <span class="api-dot" id="api-dot" aria-hidden="true"></span>
           <span id="api-status-text">DEMO</span>
         </div>
+        <div id="auth-header"></div>
         <label><span class="sr-only" style="position:absolute;width:1px;height:1px;overflow:hidden">Bankroll</span>
           <input type="number" class="bankroll-input" id="bankroll-quick" value="1000" min="0" aria-label="Bankroll en euros"></label>
         <button class="icon-btn" id="btn-theme" aria-label="Cambiar tema claro u oscuro"><i data-lucide="sun"></i></button>
@@ -221,6 +275,8 @@ const shell = `<!DOCTYPE html>
         <button class="nav-item" data-view="groups"><i data-lucide="users"></i> Fase Grupos</button>
         <button class="nav-item" data-view="knockout"><i data-lucide="trophy"></i> Eliminatorias</button>
         <button class="nav-item" data-view="valuebets"><i data-lucide="trending-up"></i> Apuestas</button>
+        <button class="nav-item" data-view="mybets"><i data-lucide="wallet"></i> Mis Apuestas</button>
+        <button class="nav-item" data-view="history"><i data-lucide="history"></i> Historial</button>
         <button class="nav-item" data-view="ai"><i data-lucide="brain"></i> Análisis IA</button>
         <button class="nav-item" data-view="settings"><i data-lucide="settings"></i> Configuración</button>
       </aside>
@@ -230,16 +286,55 @@ const shell = `<!DOCTYPE html>
       <span id="footer-update">Cargando...</span>
       <span id="footer-mode">Modo: DEMO</span>
     </footer>
+    <nav class="bottom-nav" id="bottom-nav" aria-label="Navegación móvil">
+      <button type="button" class="bottom-nav-item active" data-view="dashboard" data-bottom-nav><i data-lucide="home"></i><span>Inicio</span></button>
+      <button type="button" class="bottom-nav-item" data-view="today" data-bottom-nav><i data-lucide="calendar"></i><span>Partidos</span></button>
+      <button type="button" class="bottom-nav-item" data-view="valuebets" data-bottom-nav><i data-lucide="trending-up"></i><span>Apuestas</span></button>
+      <button type="button" class="bottom-nav-item" data-view="settings" data-bottom-nav><i data-lucide="user"></i><span>Perfil</span></button>
+    </nav>
   </div>
+  <div id="install-banner-root"></div>
   <div id="modal-root"></div>
   <div id="toast-root"></div>
   <script>
+${configScript}
 ${core}
+${supabaseJs}
+${authJs}
+${betsJs}
+${oddsLiveJs}
 ${wb}
   </script>
 </body>
 </html>`;
 fs.writeFileSync(path.join(dir, 'worldbet-ai.html'), shell);
 fs.writeFileSync(path.join(dir, 'index.html'), shell);
+
+const iconsDir = path.join(dir, 'icons');
+if (!fs.existsSync(iconsDir)) fs.mkdirSync(iconsDir, { recursive: true });
+try {
+  execSync('python scripts/generate-icons.py', { cwd: dir, stdio: 'inherit' });
+} catch (e) {
+  console.warn('Icon PNG generation skipped:', e.message);
+}
+
+const manifest = {
+  name: 'WorldBet AI',
+  short_name: 'WorldBet',
+  description: 'Predicciones y apuestas Mundial 2026',
+  start_url: '/',
+  display: 'standalone',
+  background_color: '#0d0f14',
+  theme_color: '#0d0f14',
+  orientation: 'portrait-primary',
+  icons: [
+    { src: '/icons/icon-192.png', sizes: '192x192', type: 'image/png', purpose: 'any' },
+    { src: '/icons/icon-512.png', sizes: '512x512', type: 'image/png', purpose: 'any maskable' },
+    { src: '/icons/icon.svg', sizes: 'any', type: 'image/svg+xml', purpose: 'any' }
+  ]
+};
+fs.writeFileSync(path.join(dir, 'manifest.webmanifest'), JSON.stringify(manifest, null, 2));
+
 const lines = shell.split('\n').length;
 console.log('Built worldbet-ai.html + index.html with', lines, 'lines');
+console.log('Wrote manifest.webmanifest and PWA icons');

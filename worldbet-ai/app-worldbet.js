@@ -1,15 +1,16 @@
 // ========== WORLDBET AI MAIN CLASS ==========
-/** Config por defecto — editable en Configuración si cambian las keys */
+/** Config por defecto — API keys vía variables de entorno en build o Configuración */
 const DEFAULT_CONFIG = {
-  thestatsapiKey: 'fapi_fMpvm5GUyUU0HNB0oSD3krDreoCAAEkk',
-  worldcupApiKey: '',
-  oddsApiKey: 'f943ae12007d245e3ca99c6524ded68e',
-  apifootballKey: '',
+  thestatsapiKey: (typeof window !== 'undefined' && window.API_KEYS?.thestatsapi) || '',
+  worldcupApiKey: (typeof window !== 'undefined' && window.API_KEYS?.worldcup) || '',
+  oddsApiKey: (typeof window !== 'undefined' && window.API_KEYS?.odds) || '',
+  apifootballKey: (typeof window !== 'undefined' && window.API_KEYS?.apifootball) || '',
   corsProxy: 'https://corsproxy.io/?',
   bankroll: 1000,
   kellyFraction: 0.25,
   minEdge: 0.05,
-  leagueAvgGoals: 1.35
+  leagueAvgGoals: 1.35,
+  predictionWindowDays: 7
 };
 
 class WorldBetAI {
@@ -43,19 +44,23 @@ class WorldBetAI {
       validCount: 0,
       results: {}
     };
+    this.auth = new AuthManager(this);
+    this.bets = new BetsManager(this);
+    this.oddsLive = new OddsLiveManager(this);
+    this.authModalOpen = false;
+    this.betFilter = '';
   }
 
   hasConfiguredKeys() {
-    return !!(this.config.thestatsapiKey || this.config.oddsApiKey ||
-      this.config.apifootballKey || this.config.worldcupApiKey);
+    return !!(this.config.thestatsapiKey || this.config.apifootballKey || this.config.worldcupApiKey);
   }
 
   apiTrustLabels() {
     return {
       thestats: 'TheStatsAPI',
       worldcup: 'WorldCupAPI',
-      odds: 'The Odds API',
-      apifootball: 'API-Football'
+      apifootball: 'API-Football',
+      odds: 'Cuotas live (servidor)'
     };
   }
 
@@ -67,7 +72,6 @@ class WorldBetAI {
     const entries = [
       ['thestats', !!this.config.thestatsapiKey, () => this.apiClient.testTheStatsApi()],
       ['worldcup', !!this.config.worldcupApiKey, () => this.apiClient.testWorldCupApi()],
-      ['odds', !!this.config.oddsApiKey, () => this.apiClient.testOddsApi()],
       ['apifootball', !!this.config.apifootballKey, () => this.apiClient.testApiFootball()]
     ];
 
@@ -126,7 +130,19 @@ class WorldBetAI {
     this.loadSessionPrefs();
     this.bindEvents();
     document.getElementById('bankroll-quick').value = this.config.bankroll;
+    if (SupabaseClient.isConfigured()) {
+      await this.auth.init();
+      this.updateAuthHeader();
+    }
     await this.loadAllFixtures();
+    if (SupabaseClient.isConfigured()) {
+      await this.bets.syncMatchesFromServer().catch(() => {});
+      await this.bets.upsertMatches(this.fixtures).catch(() => {});
+      const dbMatches = await this.bets.loadDbMatches();
+      this.fixtures = this.bets.mergeDbStatusIntoFixtures(this.fixtures, dbMatches);
+      if (this.auth.isLoggedIn) await this.bets.loadUserBets();
+      await this.oddsLive.init();
+    }
     if (this.hasConfiguredKeys()) {
       this.apiClient = new ApiClient(this.config);
       await this.runApiValidation();
@@ -137,16 +153,149 @@ class WorldBetAI {
     this.navigate('dashboard');
     this.updateFooter();
     this.startCountdown();
+    this.registerServiceWorker();
+    this.showIosInstallBanner();
+  }
+
+  registerServiceWorker() {
+    if (!('serviceWorker' in navigator)) return;
+    navigator.serviceWorker.register('/sw.js').catch(() => {});
+  }
+
+  showIosInstallBanner() {
+    if (window.matchMedia('(display-mode: standalone)').matches) return;
+    try { if (localStorage.getItem('wb_install_dismissed')) return; } catch {}
+    const ua = navigator.userAgent || '';
+    const isIos = /iphone|ipad|ipod/i.test(ua);
+    const isSafari = /safari/i.test(ua) && !/crios|fxios|edgios/i.test(ua);
+    if (!isIos || !isSafari) return;
+    const root = document.getElementById('install-banner-root');
+    if (!root) return;
+    root.innerHTML = `
+      <div class="install-banner" id="install-banner" role="dialog" aria-label="Instalar app">
+        <strong>Instalar en iPhone</strong>
+        <p style="margin:var(--space-2) 0;font-size:var(--text-xs);color:var(--color-text-muted)">
+          Pulsa <strong>Compartir</strong> en Safari y elige <strong>Añadir a pantalla de inicio</strong>.
+        </p>
+        <button type="button" class="btn btn-outline btn-sm" id="btn-dismiss-install">Entendido</button>
+      </div>`;
+    document.getElementById('btn-dismiss-install')?.addEventListener('click', () => {
+      try { localStorage.setItem('wb_install_dismissed', '1'); } catch {}
+      root.innerHTML = '';
+    });
+  }
+
+  onAuthChange() {
+    this.updateAuthHeader();
+    if (this.auth.isLoggedIn) {
+      this.bets.loadUserBets().then(() => {
+        this.computeAllPredictions().then(() => this.render());
+      });
+    } else {
+      this.bets.userBets = [];
+      this.render();
+    }
+  }
+
+  updateAuthHeader() {
+    const el = document.getElementById('auth-header');
+    if (!el) return;
+    if (!SupabaseClient.isConfigured()) {
+      el.innerHTML = '<span style="font-size:var(--text-xs);color:var(--color-text-muted)">Sin backend</span>';
+      return;
+    }
+    if (this.auth.isLoggedIn) {
+      el.innerHTML = `
+        <span style="font-size:var(--text-sm)">${escapeHtml(this.auth.displayName())}</span>
+        <button class="btn btn-outline btn-sm" id="btn-auth-action" type="button">Salir</button>`;
+      document.getElementById('btn-auth-action')?.addEventListener('click', () => this.auth.signOut());
+    } else {
+      el.innerHTML = `<button class="btn btn-outline btn-sm" id="btn-auth-action" type="button">Entrar</button>`;
+      document.getElementById('btn-auth-action')?.addEventListener('click', () => this.openAuthModal());
+    }
+    lucide.createIcons();
+  }
+
+  openAuthModal() {
+    const root = document.getElementById('modal-root');
+    root.innerHTML = `
+      <div class="modal-overlay" id="modal-overlay" role="dialog" aria-modal="true">
+        <div class="modal" style="max-width:420px">
+          <div class="modal-header">
+            <h2>Acceder a WorldBet</h2>
+            <button class="icon-btn" id="modal-close" aria-label="Cerrar"><i data-lucide="x"></i></button>
+          </div>
+          <div class="modal-body">
+            <div class="auth-tabs">
+              <button class="auth-tab active" data-auth-tab="login" type="button">Iniciar sesión</button>
+              <button class="auth-tab" data-auth-tab="register" type="button">Registrarse</button>
+            </div>
+            <div id="auth-panel-login">
+              <div class="form-group"><label>Email</label><input type="email" id="auth-email" autocomplete="email"></div>
+              <div class="form-group"><label>Contraseña</label><input type="password" id="auth-password" autocomplete="current-password"></div>
+              <button class="btn btn-primary" id="btn-auth-login" type="button" style="width:100%">Entrar</button>
+            </div>
+            <div id="auth-panel-register" style="display:none">
+              <div class="form-group"><label>Nombre</label><input type="text" id="auth-name" autocomplete="name"></div>
+              <div class="form-group"><label>Email</label><input type="email" id="auth-reg-email" autocomplete="email"></div>
+              <div class="form-group"><label>Contraseña</label><input type="password" id="auth-reg-password" autocomplete="new-password" minlength="6"></div>
+              <button class="btn btn-primary" id="btn-auth-register" type="button" style="width:100%">Crear cuenta</button>
+              <p style="font-size:var(--text-xs);color:var(--color-text-muted);margin-top:var(--space-3)">Bankroll inicial: €1.000 virtual</p>
+            </div>
+            <p id="auth-error" style="color:var(--color-error);margin-top:var(--space-3);font-size:var(--text-sm)"></p>
+          </div>
+        </div>
+      </div>`;
+    lucide.createIcons();
+    document.getElementById('modal-close').addEventListener('click', () => this.closeModal());
+    document.getElementById('modal-overlay').addEventListener('click', e => {
+      if (e.target.id === 'modal-overlay') this.closeModal();
+    });
+    document.querySelectorAll('[data-auth-tab]').forEach(btn => {
+      btn.addEventListener('click', () => {
+        document.querySelectorAll('.auth-tab').forEach(t => t.classList.toggle('active', t === btn));
+        document.getElementById('auth-panel-login').style.display = btn.dataset.authTab === 'login' ? '' : 'none';
+        document.getElementById('auth-panel-register').style.display = btn.dataset.authTab === 'register' ? '' : 'none';
+      });
+    });
+    document.getElementById('btn-auth-login').addEventListener('click', async () => {
+      const err = document.getElementById('auth-error');
+      try {
+        await this.auth.signIn(
+          document.getElementById('auth-email').value.trim(),
+          document.getElementById('auth-password').value
+        );
+        this.closeModal();
+        this.showToast('Sesión iniciada');
+        this.onAuthChange();
+      } catch (e) { err.textContent = e.message; }
+    });
+    document.getElementById('btn-auth-register').addEventListener('click', async () => {
+      const err = document.getElementById('auth-error');
+      try {
+        await this.auth.signUp(
+          document.getElementById('auth-reg-email').value.trim(),
+          document.getElementById('auth-reg-password').value,
+          document.getElementById('auth-name').value.trim()
+        );
+        err.style.color = 'var(--color-success)';
+        err.textContent = 'Cuenta creada. Revisa tu email para confirmar o inicia sesión.';
+      } catch (e) { err.style.color = 'var(--color-error)'; err.textContent = e.message; }
+    });
   }
 
   bindEvents() {
     document.querySelectorAll('.nav-item').forEach(btn => {
       btn.addEventListener('click', () => this.navigate(btn.dataset.view));
     });
+    document.querySelectorAll('[data-bottom-nav]').forEach(btn => {
+      btn.addEventListener('click', () => this.navigate(btn.dataset.view));
+    });
     document.getElementById('btn-theme').addEventListener('click', () => this.toggleTheme());
     document.getElementById('bankroll-quick').addEventListener('change', e => {
       this.config.bankroll = parseFloat(e.target.value) || 1000;
       this.saveSessionPrefs();
+      if (this.auth.isLoggedIn) this.auth.updateBankroll(this.config.bankroll);
       this.computeAllPredictions().then(() => this.render());
     });
     document.getElementById('btn-hamburger').addEventListener('click', () => this.toggleSidebar(true));
@@ -174,15 +323,79 @@ class WorldBetAI {
 
   normalizeFixture(f) {
     const isPlaceholder = isPlaceholderTeam(f.homeTeam) || isPlaceholderTeam(f.awayTeam);
+    const kickoffUtc = f.kickoffUtc || f.date;
+    let status = 'scheduled';
+    const rawStatus = (f.status || '').toLowerCase();
+    if (['finished', 'ft', 'complete'].includes(rawStatus)) status = 'finished';
+    else if (['live', 'inplay', '1h', '2h'].includes(rawStatus)) status = 'live';
+    else if (f.homeScore != null && f.awayScore != null) status = 'finished';
+
     return {
       id: `wc-${String(f.matchNumber).padStart(3, '0')}`,
       matchNumber: f.matchNumber,
       homeTeam: f.homeTeam, awayTeam: f.awayTeam,
       stage: f.stage, group: f.group,
-      kickoffUtc: f.kickoffUtc, date: f.date,
+      kickoffUtc, date: f.date || kickoffUtc?.slice(0, 10),
       stadium: f.stadium, hostCity: f.hostCity,
-      isPlaceholder, status: 'scheduled'
+      isPlaceholder, status,
+      homeScore: f.homeScore ?? f.home_score ?? null,
+      awayScore: f.awayScore ?? f.away_score ?? null
     };
+  }
+
+  getFixturesForPrediction() {
+    const now = Date.now();
+    const windowMs = (this.config.predictionWindowDays || 7) * 24 * 60 * 60 * 1000;
+    const betMatchIds = new Set(this.bets.getUserBetMatchIds());
+    return this.fixtures.filter(f => {
+      if (f.isPlaceholder) return false;
+      const kick = new Date(f.kickoffUtc).getTime();
+      const inWindow = kick > now - 24 * 60 * 60 * 1000 && kick < now + windowMs;
+      const hasBet = betMatchIds.has(f.id);
+      const isRecent = kick > now - 14 * 24 * 60 * 60 * 1000 && kick <= now;
+      return inWindow || hasBet || isRecent;
+    });
+  }
+
+  async ensurePrediction(matchId) {
+    if (this.predictions[matchId]) return this.predictions[matchId];
+    const f = this.fixtures.find(x => x.id === matchId);
+    if (!f || f.isPlaceholder) return null;
+    const data = await this.getMatchData(f);
+    if (!data) return null;
+    const pred = PredictionEngine.runFullPrediction(f, data, this.config);
+    this.predictions[f.id] = pred;
+    await this.persistSnapshot(f.id, pred);
+    this.rebuildValueBets();
+    return pred;
+  }
+
+  async persistSnapshot(matchId, pred) {
+    if (!SupabaseClient.isConfigured() || !pred?.recommendation) return null;
+    return this.bets.saveSnapshot(
+      matchId,
+      pred.recommendation,
+      pred.recommendation.dataSources || pred.data?.dataSources
+    );
+  }
+
+  rebuildValueBets() {
+    this.valueBets = [];
+    Object.entries(this.predictions).forEach(([matchId, pred]) => {
+      const f = this.fixtures.find(x => x.id === matchId);
+      if (!f) return;
+      (pred.valueBets || pred.analysisPicks?.slice(0, 6) || []).forEach(pick => {
+        this.valueBets.push({
+          matchId: f.id, match: `${f.homeTeam} vs ${f.awayTeam}`,
+          stage: f.stage, date: f.kickoffUtc,
+          market: pick.label, prob: pick.prob, odds: pick.odds,
+          confidence: pick.confidence, type: pick.type,
+          kelly: pick.kelly,
+          recommendation: pred.recommendation
+        });
+      });
+    });
+    this.valueBets.sort((a, b) => b.prob - a.prob);
   }
 
   async loadAllFixtures() {
@@ -220,7 +433,9 @@ class WorldBetAI {
 
     if (this.apiTrust.trusted) {
       try {
-        if (this.config.oddsApiKey) {
+        if (this.oddsLive?.has(key)) {
+          this.oddsLive.applyToMatchData(key, data);
+        } else if (this.config.oddsApiKey) {
           if (!this.oddsEventsCache) this.oddsEventsCache = await this.apiClient.fetchOddsApiEvents();
           const oddsData = this.apiClient.parseOddsApiForMatch(this.oddsEventsCache, fixture.homeTeam, fixture.awayTeam);
           if (oddsData) {
@@ -274,6 +489,8 @@ class WorldBetAI {
           }
         }
       } catch { /* mantiene datos demo parciales */ }
+    } else if (this.oddsLive?.has(key)) {
+      this.oddsLive.applyToMatchData(key, data);
     }
 
     data.dataSources = [...new Set(data.dataSources)];
@@ -282,30 +499,57 @@ class WorldBetAI {
   }
 
   async computeAllPredictions() {
-    this.predictions = {};
-    this.valueBets = [];
-    for (const f of this.fixtures) {
-      if (f.isPlaceholder) continue;
+    const toProcess = this.getFixturesForPrediction();
+    const matchIds = toProcess.map(f => f.id);
+    if (SupabaseClient.isConfigured()) {
+      await this.bets.loadSnapshotsForMatches(matchIds);
+    }
+    for (const f of toProcess) {
       const data = await this.getMatchData(f);
       if (!data) continue;
       const pred = PredictionEngine.runFullPrediction(f, data, this.config);
       this.predictions[f.id] = pred;
-      pred.valueBets.forEach(pick => {
-        this.valueBets.push({
-          matchId: f.id, match: `${f.homeTeam} vs ${f.awayTeam}`,
-          stage: f.stage, date: f.kickoffUtc,
-          market: pick.label, prob: pick.prob, odds: pick.odds,
-          confidence: pick.confidence, type: pick.type,
-          kelly: pick.kelly,
-          recommendation: pred.recommendation
-        });
-      });
+      await this.persistSnapshot(f.id, pred);
     }
-    this.valueBets.sort((a, b) => b.prob - a.prob);
+    this.rebuildValueBets();
   }
 
   refreshAllPredictions() {
     return this.computeAllPredictions();
+  }
+
+  refreshOddsUI() {
+    Object.keys(this.oddsLive?.odds || {}).forEach((matchId) => {
+      if (this.matchDataCache[matchId]) {
+        this.oddsLive.applyToMatchData(matchId, this.matchDataCache[matchId]);
+      }
+    });
+    if (['today', 'groups', 'knockout', 'dashboard', 'valuebets'].includes(this.currentView)) {
+      this.render();
+    }
+    if (this.selectedMatchId && document.getElementById('modal-overlay')) {
+      const pred = this.predictions[this.selectedMatchId];
+      if (pred?.data) {
+        const chips = document.getElementById('modal-odds-chips');
+        if (chips) chips.outerHTML = this.renderOddsChips(this.selectedMatchId, pred.data, 'modal-odds-chips');
+      }
+    }
+  }
+
+  renderOddsChips(matchId, data, idAttr) {
+    const h = data?.marketHomeOdds;
+    const d = data?.marketDrawOdds;
+    const a = data?.marketAwayOdds;
+    if (!h) return '';
+    const ol = this.oddsLive;
+    const fc = (f) => ol?.chipClass(matchId, f) || '';
+    const ar = (f) => ol?.arrow(matchId, f) || '';
+    const id = idAttr ? ` id="${idAttr}"` : '';
+    return `<div class="odds-row"${id}>
+      <div class="odds-chip ${fc('home')}"><span class="odds-lbl">1</span><strong>${h.toFixed(2)}${ar('home')}</strong></div>
+      <div class="odds-chip ${fc('draw')}"><span class="odds-lbl">X</span><strong>${d ? d.toFixed(2) : '—'}${ar('draw')}</strong></div>
+      <div class="odds-chip ${fc('away')}"><span class="odds-lbl">2</span><strong>${a ? a.toFixed(2) : '—'}${ar('away')}</strong></div>
+    </div>`;
   }
 
   renderRecBox(rec, compact) {
@@ -316,7 +560,8 @@ class WorldBetAI {
       : `${rec.expectedTotalGoals} esp. · ${escapeHtml(rec.goalsPick)}`;
     if (compact) {
       return `<div class="rec-box ${confCls} compact">
-        <div class="rec-primary">${escapeHtml(rec.primaryAction)} <strong>${escapeHtml(rec.primaryBet)}</strong>${rec.primaryOdds ? ` @ ${rec.primaryOdds.toFixed(2)}` : ''}</div>
+        <div class="rec-primary">${escapeHtml(rec.primaryAction)} <strong>${escapeHtml(rec.primaryBet)}</strong>
+        ${rec.primaryOdds ? `<span class="rec-odds-big">${rec.primaryOdds.toFixed(2)}</span>` : ''}</div>
         <div class="rec-detail">${pct(rec.primaryProb)} · Marcador ${rec.likelyScore} · ${goalsLine}</div>
       </div>`;
     }
@@ -328,7 +573,8 @@ class WorldBetAI {
     return `<div class="rec-box ${confCls}">
       <div class="rec-label">APUESTA RECOMENDADA · ${rec.primaryConfidence || 'ANÁLISIS'}</div>
       <div class="rec-primary">${escapeHtml(rec.primaryAction)} <strong>${escapeHtml(rec.primaryBet)}</strong>
-        ${rec.primaryOdds ? `@ ${rec.primaryOdds.toFixed(2)}` : ''} <span style="font-size:var(--text-sm);color:var(--color-text-muted)">(${pct(rec.primaryProb)})</span></div>
+        ${rec.primaryOdds ? `<span class="rec-odds-big">${rec.primaryOdds.toFixed(2)}</span>` : ''}
+        <span style="font-size:var(--text-sm);color:var(--color-text-muted)">(${pct(rec.primaryProb)})</span></div>
       ${rec.primaryReason ? `<div class="rec-detail" style="margin-bottom:var(--space-2)">${escapeHtml(rec.primaryReason)}</div>` : ''}
       <div class="rec-grid">
         <div><span class="rec-k">Ganador modelo</span><br>${escapeHtml(rec.modelWinner)} (${pct(rec.modelWinnerProb)})</div>
@@ -424,7 +670,7 @@ class WorldBetAI {
 
   getNextMatch() {
     const now = Date.now();
-    return this.fixtures.filter(f => !f.isPlaceholder && new Date(f.kickoffUtc) > now)
+    return this.fixtures.filter(f => !f.isPlaceholder && f.status !== 'finished' && new Date(f.kickoffUtc) > now)
       .sort((a, b) => new Date(a.kickoffUtc) - new Date(b.kickoffUtc))[0];
   }
 
@@ -441,13 +687,21 @@ class WorldBetAI {
       const t = this.filters.team.toLowerCase();
       list = list.filter(f => f.homeTeam.toLowerCase().includes(t) || f.awayTeam.toLowerCase().includes(t));
     }
+    if (this.filters.status) list = list.filter(f => f.status === this.filters.status);
     return list.sort((a, b) => new Date(a.kickoffUtc) - new Date(b.kickoffUtc));
+  }
+
+  matchStatusBadge(f) {
+    const labels = { scheduled: 'Programado', live: 'En juego', finished: 'Finalizado' };
+    const cls = { scheduled: 'badge-group', live: 'badge-value', finished: 'badge-tbd' };
+    return `<span class="badge ${cls[f.status] || 'badge-group'}">${labels[f.status] || f.status}</span>`;
   }
 
   navigate(view) {
     this.currentView = view;
     ChartManager.destroyAll();
     document.querySelectorAll('.nav-item').forEach(n => n.classList.toggle('active', n.dataset.view === view));
+    document.querySelectorAll('[data-bottom-nav]').forEach(n => n.classList.toggle('active', n.dataset.view === view));
     this.toggleSidebar(false);
     this.render();
   }
@@ -465,6 +719,8 @@ class WorldBetAI {
       case 'groups':
       case 'knockout': main.innerHTML = this.renderFixtures(this.currentView); break;
       case 'valuebets': main.innerHTML = this.renderValueBets(); break;
+      case 'mybets': main.innerHTML = this.renderMyBets(); break;
+      case 'history': main.innerHTML = this.renderHistory(); break;
       case 'ai': main.innerHTML = this.renderAIAnalysis(); break;
       case 'settings': main.innerHTML = this.renderSettings(); break;
     }
@@ -473,6 +729,7 @@ class WorldBetAI {
       this.initDashboardCharts();
       this.animateKPIs();
     }
+    if (this.currentView === 'history') this.loadHistoryView();
     this.bindViewEvents();
   }
 
@@ -498,13 +755,17 @@ class WorldBetAI {
     const todayBets = this.valueBets.filter(v => v.date?.slice(0, 10) === new Date().toISOString().slice(0, 10));
     const top3 = this.valueBets.slice(0, 3);
     const accuracy = this.modelHistory[this.modelHistory.length - 1]?.accuracy || 58;
+    const userStats = this.bets.getStats();
+    const roi = this.auth.isLoggedIn ? userStats.roi : 12.4;
     return `
       <h1 class="view-title">Dashboard</h1>
+      ${!SupabaseClient.isConfigured() ? '<p style="color:var(--color-warning);margin-bottom:var(--space-4);font-size:var(--text-sm)">Configura Supabase en el build para guardar apuestas y usuarios.</p>' : ''}
+      ${SupabaseClient.isConfigured() && !this.auth.isLoggedIn ? '<p style="color:var(--color-text-muted);margin-bottom:var(--space-4);font-size:var(--text-sm)"><button class="btn btn-outline btn-sm" id="btn-dash-login" type="button">Inicia sesión</button> para guardar apuestas con bankroll virtual.</p>' : ''}
       <div class="kpi-grid">
         <div class="kpi-card"><div class="kpi-label">Partidos</div><div class="kpi-value" data-countup="${this.fixtures.length}">0</div></div>
         <div class="kpi-card"><div class="kpi-label">Apuestas Hoy</div><div class="kpi-value" data-countup="${todayBets.length || this.valueBets.length}">0</div></div>
         <div class="kpi-card"><div class="kpi-label">Precisión Modelo</div><div class="kpi-value" data-countup="${accuracy}" data-suffix="%" data-decimals="1">0</div></div>
-        <div class="kpi-card"><div class="kpi-label">ROI Acumulado</div><div class="kpi-value" data-countup="12.4" data-suffix="%" data-decimals="1">0</div></div>
+        <div class="kpi-card"><div class="kpi-label">${this.auth.isLoggedIn ? 'Tu ROI' : 'ROI Acumulado'}</div><div class="kpi-value" data-countup="${roi.toFixed(1)}" data-suffix="%" data-decimals="1">0</div></div>
       </div>
       <div class="grid-2">
         <div class="card">
@@ -556,6 +817,11 @@ class WorldBetAI {
         <select id="filter-date"><option value="">Todas las fechas</option>
           ${dates.map(d => `<option value="${d}" ${this.filters.date===d?'selected':''}>${d}</option>`).join('')}
         </select>
+        <select id="filter-status"><option value="">Todos los estados</option>
+          <option value="scheduled" ${this.filters.status==='scheduled'?'selected':''}>Programado</option>
+          <option value="live" ${this.filters.status==='live'?'selected':''}>En juego</option>
+          <option value="finished" ${this.filters.status==='finished'?'selected':''}>Finalizado</option>
+        </select>
         <input type="search" id="filter-team" placeholder="Buscar equipo..." value="${escapeHtml(this.filters.team)}">
       </div>
       ${list.length ? `<div class="match-grid">${list.map(f => this.renderMatchCard(f)).join('')}</div>` :
@@ -566,6 +832,7 @@ class WorldBetAI {
   renderMatchCard(f) {
     const pred = this.predictions[f.id];
     const rec = pred?.recommendation;
+    const d = pred?.data;
     const hasPick = pred?.recommendation?.primaryBet;
     return `
       <article class="match-card">
@@ -581,12 +848,15 @@ class WorldBetAI {
         <div style="display:flex;gap:var(--space-2);flex-wrap:wrap;margin-bottom:var(--space-3)">
           ${f.group ? `<span class="badge badge-group">Grupo ${f.group}</span>` : ''}
           <span class="badge badge-group">${STAGE_LABELS[f.stage] || f.stage}</span>
+          ${this.matchStatusBadge(f)}
           ${f.isPlaceholder ? '<span class="badge badge-tbd">Por definir</span>' : ''}
           ${hasPick ? '<span class="badge badge-value">Apuesta lista</span>' : ''}
         </div>
+        ${f.status === 'finished' && f.homeScore != null ? `<p style="font-weight:600;margin-bottom:var(--space-2)">Resultado: ${f.homeScore} - ${f.awayScore}</p>` : ''}
         ${f.isPlaceholder
           ? '<p style="font-size:var(--text-sm);color:var(--color-text-muted)">Equipos por definir</p>'
-          : `${rec ? this.renderRecBox(rec, true) : ''}
+          : `${d ? this.renderOddsChips(f.id, d) : '<div class="skeleton" style="min-height:48px;margin:var(--space-2) 0"></div>'}
+          ${rec ? this.renderRecBox(rec, true) : ''}
           <button class="btn btn-primary" data-match="${f.id}" style="margin-top:var(--space-3)">Ver Análisis</button>`}
       </article>`;
   }
@@ -608,7 +878,7 @@ class WorldBetAI {
         <button class="btn btn-outline" id="btn-export-csv"><i data-lucide="download"></i> Exportar CSV</button>
       </div>
       ${bets.length ? `
-        <div class="card table-wrap">
+        <div class="card table-wrap desktop-only">
           <table>
             <thead><tr>
               <th>Partido</th><th>Mercado</th><th>Cuota</th><th>Prob. Modelo</th>
@@ -626,8 +896,119 @@ class WorldBetAI {
               </tr>
             `).join('')}</tbody>
           </table>
-        </div>` : '<div class="empty-state card"><div class="empty-icon">⚽</div><p>No hay apuestas recomendadas</p></div>'}
+        </div>
+        <div class="mobile-cards">${bets.map(b => `
+          <div class="vb-card">
+            <strong>${escapeHtml(b.match)}</strong>
+            <div class="bet-card-row"><span>Mercado</span><span>${escapeHtml(b.market)}</span></div>
+            <div class="bet-card-row"><span>Cuota</span><span class="rec-odds-big" style="font-size:var(--text-lg)">${b.odds.toFixed(2)}</span></div>
+            <div class="bet-card-row"><span>Prob. modelo</span><span>${pct(b.prob)}</span></div>
+            <div class="bet-card-row"><span>Confianza</span><span class="${b.confidence==='ALTA'?'value-high':b.confidence==='MEDIA'?'value-med':'value-low'}">${b.confidence}</span></div>
+            <div class="bet-card-row"><span>Kelly 1/4</span><span>${pct(b.kelly.recommendedBet)}</span></div>
+          </div>
+        `).join('')}</div>` : '<div class="empty-state card"><div class="empty-icon">⚽</div><p>No hay apuestas recomendadas</p></div>'}
     `;
+  }
+
+  renderMyBets() {
+    if (!SupabaseClient.isConfigured()) {
+      return `<h1 class="view-title">Mis Apuestas</h1><div class="empty-state card"><p>Backend no configurado</p></div>`;
+    }
+    if (!this.auth.isLoggedIn) {
+      return `<h1 class="view-title">Mis Apuestas</h1>
+        <div class="empty-state card"><p>Inicia sesión para ver tus apuestas</p>
+        <button class="btn btn-primary" id="btn-dash-login" type="button">Entrar</button></div>`;
+    }
+    const stats = this.bets.getStats();
+    let bets = [...this.bets.userBets];
+    if (this.betFilter) bets = bets.filter(b => b.status === this.betFilter);
+    return `
+      <h1 class="view-title">Mis Apuestas</h1>
+      <div class="kpi-grid" style="margin-bottom:var(--space-4)">
+        <div class="kpi-card"><div class="kpi-label">Bankroll</div><div class="kpi-value">${euro(this.auth.profile?.bankroll ?? this.config.bankroll)}</div></div>
+        <div class="kpi-card"><div class="kpi-label">Ganadas</div><div class="kpi-value value-high">${stats.won}</div></div>
+        <div class="kpi-card"><div class="kpi-label">Perdidas</div><div class="kpi-value value-low">${stats.lost}</div></div>
+        <div class="kpi-card"><div class="kpi-label">Pendientes</div><div class="kpi-value">${stats.pending}</div></div>
+      </div>
+      <div class="filters">
+        <select id="bet-filter-status">
+          <option value="">Todas</option>
+          <option value="pending" ${this.betFilter==='pending'?'selected':''}>Pendientes</option>
+          <option value="won" ${this.betFilter==='won'?'selected':''}>Ganadas</option>
+          <option value="lost" ${this.betFilter==='lost'?'selected':''}>Perdidas</option>
+        </select>
+        <button class="btn btn-outline" id="btn-refresh-bets" type="button">Actualizar</button>
+      </div>
+      ${bets.length ? `
+        <div class="card table-wrap desktop-only">
+          <table>
+            <thead><tr><th>Partido</th><th>Mercado</th><th>Cuota</th><th>Stake</th><th>Estado</th><th>P/L</th><th>Fecha</th></tr></thead>
+            <tbody>${bets.map(b => {
+              const m = b.matches || {};
+              const matchLabel = m.home_team ? `${m.home_team} vs ${m.away_team}` : b.match_id;
+              const pl = b.status === 'won' ? `+${euro(b.payout)}` : b.status === 'lost' ? `-${euro(b.stake)}` : '—';
+              return `<tr>
+                <td>${escapeHtml(matchLabel)}${m.status === 'finished' && m.home_score != null ? `<br><small>${m.home_score}-${m.away_score}</small>` : ''}</td>
+                <td>${escapeHtml(b.market_label)}</td>
+                <td>${Number(b.odds).toFixed(2)}</td>
+                <td>${euro(b.stake)}</td>
+                <td class="${this.bets.statusClass(b.status)}">${this.bets.statusLabel(b.status)}</td>
+                <td class="${this.bets.statusClass(b.status)}">${pl}</td>
+                <td>${new Date(b.placed_at).toLocaleDateString('es-ES')}</td>
+              </tr>`;
+            }).join('')}</tbody>
+          </table>
+        </div>
+        <div class="mobile-cards">${bets.map(b => {
+          const m = b.matches || {};
+          const matchLabel = m.home_team ? `${m.home_team} vs ${m.away_team}` : b.match_id;
+          const pl = b.status === 'won' ? `+${euro(b.payout)}` : b.status === 'lost' ? `-${euro(b.stake)}` : '—';
+          return `<div class="bet-card">
+            <strong>${escapeHtml(matchLabel)}</strong>
+            ${m.status === 'finished' && m.home_score != null ? `<div class="bet-card-row"><span>Resultado</span><span>${m.home_score}-${m.away_score}</span></div>` : ''}
+            <div class="bet-card-row"><span>Mercado</span><span>${escapeHtml(b.market_label)}</span></div>
+            <div class="bet-card-row"><span>Cuota</span><span class="rec-odds-big" style="font-size:var(--text-lg)">${Number(b.odds).toFixed(2)}</span></div>
+            <div class="bet-card-row"><span>Stake</span><span>${euro(b.stake)}</span></div>
+            <div class="bet-card-row"><span>Estado</span><span class="${this.bets.statusClass(b.status)}">${this.bets.statusLabel(b.status)}</span></div>
+            <div class="bet-card-row"><span>P/L</span><span class="${this.bets.statusClass(b.status)}">${pl}</span></div>
+            <div class="bet-card-row"><span>Fecha</span><span>${new Date(b.placed_at).toLocaleDateString('es-ES')}</span></div>
+          </div>`;
+        }).join('')}</div>` : '<div class="empty-state card"><p>No tienes apuestas aún. Abre un partido y pulsa Guardar apuesta.</p></div>'}
+    `;
+  }
+
+  renderHistory() {
+    return `
+      <h1 class="view-title">Historial de Sugerencias</h1>
+      <p style="color:var(--color-text-muted);margin-bottom:var(--space-4);font-size:var(--text-sm)">Predicciones guardadas del modelo, incluso para partidos ya jugados.</p>
+      <div id="history-list"><div class="skeleton" style="height:120px"></div></div>
+    `;
+  }
+
+  async loadHistoryView() {
+    const el = document.getElementById('history-list');
+    if (!el) return;
+    if (!SupabaseClient.isConfigured()) {
+      el.innerHTML = '<div class="empty-state card"><p>Backend no configurado</p></div>';
+      return;
+    }
+    const snapshots = await this.bets.loadLatestSnapshots(40);
+    if (!snapshots.length) {
+      el.innerHTML = '<div class="empty-state card"><p>Aún no hay snapshots. Se guardan al analizar partidos.</p></div>';
+      return;
+    }
+    el.innerHTML = snapshots.map(s => {
+      const m = s.matches || {};
+      const rec = s.recommendation || {};
+      const result = m.status === 'finished' && m.home_score != null
+        ? `<span class="badge badge-tbd">Resultado: ${m.home_score}-${m.away_score}</span>` : '';
+      return `<div class="card" style="margin-bottom:var(--space-3)">
+        <strong>${escapeHtml(m.home_team || '')} vs ${escapeHtml(m.away_team || '')}</strong>
+        ${result}
+        <p style="font-size:var(--text-sm);margin:var(--space-2) 0">${escapeHtml(rec.summary || rec.primaryBet || '')}</p>
+        <p style="font-size:var(--text-xs);color:var(--color-text-muted)">Actualizado: ${new Date(s.computed_at).toLocaleString('es-ES')}</p>
+      </div>`;
+    }).join('');
   }
 
   renderAIAnalysis() {
@@ -660,14 +1041,15 @@ class WorldBetAI {
       <h1 class="view-title">Configuración</h1>
       <div class="card settings-form">
         <p style="color:var(--color-text-muted);margin-bottom:var(--space-4);font-size:var(--text-sm)">
-          Las API keys se guardan solo en memoria de sesión (no en localStorage).
+          Las API keys se cargan desde variables de entorno en el build, o puedes configurarlas aquí (solo memoria de sesión).
         </p>
         <div class="form-group"><label>TheStatsAPI Key</label>
           <input type="password" id="cfg-thestats" value="${escapeHtml(this.config.thestatsapiKey)}" autocomplete="off"></div>
         <div class="form-group"><label>WorldCupAPI Key</label>
           <input type="password" id="cfg-worldcup" value="${escapeHtml(this.config.worldcupApiKey)}" autocomplete="off"></div>
-        <div class="form-group"><label>The Odds API Key</label>
-          <input type="password" id="cfg-odds" value="${escapeHtml(this.config.oddsApiKey)}" autocomplete="off"></div>
+        <p style="font-size:var(--text-sm);color:var(--color-text-muted);margin-bottom:var(--space-4)">
+          Las cuotas de mercado se sincronizan cada ~4 min desde el servidor (Supabase Edge Function). No necesitas The Odds API en el cliente.
+        </p>
         <div class="form-group"><label>API-Football Key (RapidAPI)</label>
           <input type="password" id="cfg-apifootball" value="${escapeHtml(this.config.apifootballKey)}" autocomplete="off"></div>
         <div class="form-group"><label>Proxy CORS (opcional)</label>
@@ -699,7 +1081,7 @@ class WorldBetAI {
     document.querySelectorAll('[data-match]').forEach(btn => {
       btn.addEventListener('click', () => this.openMatchModal(btn.dataset.match));
     });
-    ['filter-group','filter-stage','filter-date'].forEach(id => {
+    ['filter-group','filter-stage','filter-date','filter-status'].forEach(id => {
       const el = document.getElementById(id);
       if (el) el.addEventListener('change', e => {
         const key = id.replace('filter-','');
@@ -726,13 +1108,26 @@ class WorldBetAI {
     if (testApis) testApis.addEventListener('click', () => this.testAllApis());
     const resetCfg = document.getElementById('btn-reset-config');
     if (resetCfg) resetCfg.addEventListener('click', () => { void this.resetConfig(); });
+    document.getElementById('btn-dash-login')?.addEventListener('click', () => this.openAuthModal());
+    document.getElementById('bet-filter-status')?.addEventListener('change', e => {
+      this.betFilter = e.target.value;
+      this.render();
+    });
+    document.getElementById('btn-refresh-bets')?.addEventListener('click', async () => {
+      await this.bets.loadUserBets();
+      await SupabaseClient.invokeFunction('settle-bets');
+      await this.auth.loadProfile();
+      this.render();
+      this.showToast('Apuestas actualizadas');
+    });
   }
 
   async openMatchModal(matchId) {
     const fixture = this.fixtures.find(f => f.id === matchId);
     if (!fixture || fixture.isPlaceholder) return;
     this.selectedMatchId = matchId;
-    const pred = this.predictions[matchId];
+    let pred = this.predictions[matchId];
+    if (!pred) pred = await this.ensurePrediction(matchId);
     if (!pred) return;
     const p = pred.prediction;
     const d = pred.data;
@@ -763,6 +1158,7 @@ class WorldBetAI {
               </div>
               <div>
                 <h3 style="margin-bottom:var(--space-3)">Cuotas de Mercado</h3>
+                ${this.renderOddsChips(matchId, d, 'modal-odds-chips')}
                 ${Object.entries(d.bookmakers).map(([name, o]) =>
                   `<p style="font-size:var(--text-sm);margin:var(--space-2) 0"><strong>${name}:</strong> ${o.home.toFixed(2)} / ${o.draw.toFixed(2)} / ${o.away.toFixed(2)}</p>`
                 ).join('')}
@@ -793,13 +1189,22 @@ class WorldBetAI {
             </div>
             <h3 style="margin:var(--space-4) 0 var(--space-3)">Configurar Apuesta</h3>
             <div class="filters">
-              <input type="number" id="bet-bankroll" value="${this.config.bankroll}" aria-label="Bankroll">
+              <input type="number" id="bet-bankroll" value="${this.auth.profile?.bankroll ?? this.config.bankroll}" aria-label="Bankroll">
               <select id="bet-market">${pred.analysisPicks?.length ? pred.analysisPicks.map((v,i) =>
-                `<option value="${i}" data-odds="${v.odds}" data-prob="${v.prob}">${escapeHtml(v.label)}</option>`
-              ).join('') : `<option value="0" data-odds="${d.marketHomeOdds}" data-prob="${p.homeWin}">${escapeHtml(fixture.homeTeam)} gana</option>`}</select>
+                `<option value="${i}" data-odds="${v.odds}" data-prob="${v.prob}" data-type="${escapeHtml(v.type)}">${escapeHtml(v.label)}</option>`
+              ).join('') : `<option value="0" data-odds="${d.marketHomeOdds}" data-prob="${p.homeWin}" data-type="ganador">${escapeHtml(fixture.homeTeam)} gana</option>`}</select>
               <input type="number" id="bet-odds" step="0.01" value="${pred.analysisPicks?.[0]?.odds || d.marketHomeOdds}" aria-label="Cuota">
+              <input type="number" id="bet-stake" step="1" min="1" placeholder="Stake €" aria-label="Stake">
             </div>
             <p id="bet-result" style="margin-top:var(--space-3);font-weight:600"></p>
+            ${SupabaseClient.isConfigured() ? `
+              <button class="btn btn-primary" id="btn-save-bet" type="button" style="margin-top:var(--space-3)" ${!this.auth.isLoggedIn ? 'disabled title="Inicia sesión"' : ''}>
+                ${this.auth.isLoggedIn ? 'Guardar apuesta' : 'Inicia sesión para guardar'}
+              </button>
+              ${new Date(fixture.kickoffUtc) <= new Date() ? '<p style="color:var(--color-warning);font-size:var(--text-sm);margin-top:var(--space-2)">Partido ya empezado — no se pueden guardar nuevas apuestas</p>' : ''}
+            ` : ''}
+            <details class="chart-accordion">
+              <summary>Gráficos y mapa de calor</summary>
             <div class="chart-row">
               <div class="chart-box"><canvas id="chart-prob" height="180"></canvas></div>
               <div class="chart-box"><canvas id="chart-goals" height="180"></canvas></div>
@@ -809,6 +1214,7 @@ class WorldBetAI {
               <h4 style="margin-bottom:var(--space-3)">Mapa de Calor de Resultados</h4>
               <div id="chart-heatmap"></div>
             </div>
+            </details>
           </div>
         </div>
       </div>`;
@@ -820,14 +1226,17 @@ class WorldBetAI {
     const updateBet = () => {
       const bankroll = parseFloat(document.getElementById('bet-bankroll').value) || 1000;
       const odds = parseFloat(document.getElementById('bet-odds').value) || 2;
+      const stakeEl = document.getElementById('bet-stake');
       const sel = document.getElementById('bet-market');
       const prob = parseFloat(sel.selectedOptions[0]?.dataset.prob) || 0.5;
       const kelly = PredictionEngine.kellyCriterion(prob, odds, bankroll, this.config.kellyFraction);
-      const gain = kelly.stakeSuggestion * (odds - 1);
+      if (stakeEl && !stakeEl.value) stakeEl.placeholder = kelly.stakeSuggestion.toFixed(2);
+      const stake = parseFloat(stakeEl?.value) || kelly.stakeSuggestion;
+      const gain = stake * (odds - 1);
       document.getElementById('bet-result').textContent =
-        `Apostar: €${kelly.stakeSuggestion.toFixed(2)} | Ganancia potencial: +€${gain.toFixed(2)} | Riesgo: ${kelly.riskLevel}`;
+        `Apostar: €${stake.toFixed(2)} | Ganancia potencial: +€${gain.toFixed(2)} | Riesgo: ${kelly.riskLevel}`;
     };
-    ['bet-bankroll','bet-market','bet-odds'].forEach(id => {
+    ['bet-bankroll','bet-market','bet-odds','bet-stake'].forEach(id => {
       const el = document.getElementById(id);
       if (el) el.addEventListener('input', () => {
         if (id === 'bet-market') document.getElementById('bet-odds').value = el.selectedOptions[0]?.dataset.odds;
@@ -835,6 +1244,32 @@ class WorldBetAI {
       });
     });
     updateBet();
+    document.getElementById('btn-save-bet')?.addEventListener('click', async () => {
+      if (!this.auth.isLoggedIn) { this.openAuthModal(); return; }
+      const sel = document.getElementById('bet-market');
+      const opt = sel.selectedOptions[0];
+      const stake = parseFloat(document.getElementById('bet-stake').value);
+      const odds = parseFloat(document.getElementById('bet-odds').value);
+      if (!stake || stake <= 0) { this.showToast('Indica un stake válido'); return; }
+      try {
+        const snapshotId = this.bets.snapshots[matchId]?.id
+          || await this.persistSnapshot(matchId, pred);
+        await this.bets.placeBet({
+          matchId,
+          marketType: opt.dataset.type || 'ganador',
+          marketLabel: opt.textContent,
+          odds,
+          stake,
+          snapshotId
+        });
+        this.showToast('Apuesta guardada');
+        document.getElementById('bet-bankroll').value = this.auth.profile?.bankroll;
+        document.getElementById('bankroll-quick').value = this.auth.profile?.bankroll;
+        updateBet();
+      } catch (e) {
+        this.showToast(e.message);
+      }
+    });
     setTimeout(() => {
       ChartManager.createProbDoughnut('chart-prob', [p.homeWin, p.draw, p.awayWin],
         [fixture.homeTeam, 'Empate', fixture.awayTeam]);
@@ -890,7 +1325,6 @@ class WorldBetAI {
   async saveConfig() {
     this.config.thestatsapiKey = document.getElementById('cfg-thestats').value;
     this.config.worldcupApiKey = document.getElementById('cfg-worldcup').value;
-    this.config.oddsApiKey = document.getElementById('cfg-odds').value;
     this.config.apifootballKey = document.getElementById('cfg-apifootball').value;
     this.config.corsProxy = document.getElementById('cfg-proxy').value;
     this.config.bankroll = parseFloat(document.getElementById('cfg-bankroll').value) || 1000;
@@ -949,7 +1383,6 @@ class WorldBetAI {
     if (!g('cfg-thestats')) return;
     this.config.thestatsapiKey = g('cfg-thestats').value;
     this.config.worldcupApiKey = g('cfg-worldcup').value;
-    this.config.oddsApiKey = g('cfg-odds').value;
     this.config.apifootballKey = g('cfg-apifootball').value;
     this.config.corsProxy = g('cfg-proxy').value;
     this.config.bankroll = parseFloat(g('cfg-bankroll').value) || 1000;

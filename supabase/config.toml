@@ -1,0 +1,30 @@
+[project]
+id = "worldbet-ai"
+name = "WorldBet AI"
+
+[api]
+enabled = true
+
+[functions.sync-matches]
+verify_jwt = false
+
+[functions.sync-matches.cron]
+schedule = "0 * * * *"
+
+[functions.settle-bets]
+verify_jwt = false
+
+[functions.settle-bets.cron]
+schedule = "*/30 * * * *"
+
+[functions.compute-snapshots]
+verify_jwt = false
+
+[functions.compute-snapshots.cron]
+schedule = "0 */6 * * *"
+
+[functions.refresh-odds]
+verify_jwt = false
+
+[functions.refresh-odds.cron]
+schedule = "*/4 * * * *"
