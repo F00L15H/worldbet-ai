@@ -198,7 +198,7 @@
 /* PWA + iPhone native feel */
 :root {
   --header-h: 52px;
-  --bottom-nav-content-h: 46px;
+  --bottom-nav-content-h: 50px;
   --safe-top: env(safe-area-inset-top, 0px);
   --safe-bottom: env(safe-area-inset-bottom, 0px);
   --bottom-nav-h: calc(var(--bottom-nav-content-h) + var(--safe-bottom));
@@ -252,19 +252,27 @@ input, select, textarea, .filters input, .filters select, .form-group input, .fo
 /* Bottom navigation (mobile) */
 .bottom-nav {
   display: none; position: fixed; bottom: 0; left: 0; right: 0; z-index: 110;
-  height: var(--bottom-nav-h);
-  padding-bottom: var(--safe-bottom);
-  box-sizing: border-box;
-  background: var(--color-surface); border-top: 1px solid var(--color-border);
   grid-template-columns: repeat(4, 1fr); align-items: center;
+  min-height: var(--bottom-nav-content-h);
+  padding-bottom: var(--safe-bottom);
+  background: transparent;
+  border: none;
+}
+.bottom-nav::before {
+  content: ''; position: absolute; left: 0; right: 0; top: 0;
+  height: var(--bottom-nav-content-h);
+  background: var(--color-surface);
+  border-top: 1px solid var(--color-border);
+  pointer-events: none;
 }
 .bottom-nav-item {
+  position: relative; z-index: 1;
   display: flex; flex-direction: column; align-items: center; justify-content: center;
-  gap: 1px; font-size: 9px; line-height: 1.1; color: var(--color-text-muted);
-  min-height: 0; height: 100%; max-height: var(--bottom-nav-content-h);
-  padding: 4px 2px 2px; transition: var(--transition-interactive);
+  gap: 2px; font-size: 10px; line-height: 1.1; color: var(--color-text-muted);
+  min-height: var(--bottom-nav-content-h);
+  padding: 4px 2px; transition: var(--transition-interactive);
 }
-.bottom-nav-item i, .bottom-nav-item svg { width: 20px; height: 20px; }
+.bottom-nav-item i, .bottom-nav-item svg { width: 22px; height: 22px; }
 .bottom-nav-item.active { color: var(--color-primary); font-weight: 600; }
 
 /* Mobile cards for tables */
@@ -536,7 +544,7 @@ input, select, textarea, .filters input, .filters select, .form-group input, .fo
   <div id="toast-root"></div>
   <script>
 window.SUPABASE_CONFIG = {"url":"https://oobvipfilbnsynxwmqsj.supabase.co","anonKey":"sb_publishable_bQH7G0xvYNINNKu8tK-Xdw_3gdaYJmh"};
-window.API_KEYS = {"thestatsapi":"fapi_fMpvm5GUyUU0HNB0oSD3krDreoCAAEkk","apifootball":"","worldcup":""};
+window.API_KEYS = {"thestatsapi":"","apifootball":"","worldcup":""};
 'use strict';
 
 // ========== CONSTANTS ==========
@@ -765,11 +773,22 @@ class ApiClient {
     return demoFallback;
   }
   async loadAllFixtures() {
+    if (this.config.useThestatsProxy && typeof SupabaseClient !== 'undefined') {
+      const r = await SupabaseClient.invokeTheStats('fixtures');
+      if (r.ok && r.data?.fixtures) return r.data.fixtures;
+      if (r.ok && Array.isArray(r.data)) return r.data;
+    }
     const data = await this.fetchApi(FIXTURES_URL, {}, { ttlMs: 60 * 60 * 1000 });
     return data?.fixtures || data || [];
   }
   needsProxy() { return !!this.config.corsProxy; }
   async fetchMatchStats(matchId) {
+    if (this.config.useThestatsProxy && typeof SupabaseClient !== 'undefined') {
+      const r = await SupabaseClient.invokeTheStats('match-stats', { matchId });
+      if (r.ok && r.data?.data) return r.data.data;
+      if (r.ok && r.data) return r.data;
+      return null;
+    }
     if (!this.config.thestatsapiKey) return null;
     return this.fetchApi(`${THESTATSAPI_BASE}/football/matches/${matchId}/stats`, {
       headers: { Authorization: `Bearer ${this.config.thestatsapiKey}` }
@@ -854,6 +873,11 @@ class ApiClient {
     return result.marketHomeOdds ? result : null;
   }
   async testTheStatsApi() {
+    if (this.config.useThestatsProxy && typeof SupabaseClient !== 'undefined') {
+      const r = await SupabaseClient.invokeTheStats('health');
+      const ok = r.ok && (r.data?.status === 'healthy' || r.data?.ok);
+      return { ok, msg: ok ? 'healthy (servidor)' : (r.error || r.data?.status || 'Sin respuesta') };
+    }
     if (!this.config.thestatsapiKey) return { ok: false, msg: 'Sin API key' };
     const d = await this.fetchApi(`${THESTATSAPI_BASE}/health`, {
       headers: { Authorization: `Bearer ${this.config.thestatsapiKey}` }
@@ -1449,16 +1473,20 @@ const SupabaseClient = {
     return this._client;
   },
 
-  async invokeFunction(name) {
+  async invokeFunction(name, body = {}) {
     const client = this.getClient();
     if (!client) return { ok: false, error: 'Supabase no configurado' };
     try {
-      const { data, error } = await client.functions.invoke(name, { body: {} });
+      const { data, error } = await client.functions.invoke(name, { body });
       if (error) return { ok: false, error: error.message };
       return { ok: true, data };
     } catch (e) {
       return { ok: false, error: e.message };
     }
+  },
+
+  async invokeTheStats(action, params = {}) {
+    return this.invokeFunction('thestats-api', { action, ...params });
   }
 };
 
@@ -1981,10 +2009,20 @@ class WorldBetAI {
     this.authModalOpen = false;
     this.betFilter = '';
     this.predictionsLoading = false;
+    this.serverTheStats = false;
   }
 
   hasConfiguredKeys() {
-    return !!(this.config.thestatsapiKey || this.config.apifootballKey || this.config.worldcupApiKey);
+    return !!(this.serverTheStats || this.config.thestatsapiKey || this.config.apifootballKey || this.config.worldcupApiKey);
+  }
+
+  async initServerApis() {
+    if (!SupabaseClient.isConfigured()) return;
+    const r = await SupabaseClient.invokeTheStats('status');
+    if (r.ok && r.data?.configured && r.data?.healthy) {
+      this.serverTheStats = true;
+      this.config.useThestatsProxy = true;
+    }
   }
 
   apiTrustLabels() {
@@ -2002,7 +2040,7 @@ class WorldBetAI {
 
     const labels = this.apiTrustLabels();
     const entries = [
-      ['thestats', !!this.config.thestatsapiKey, () => this.apiClient.testTheStatsApi()],
+      ['thestats', this.serverTheStats || !!this.config.thestatsapiKey, () => this.apiClient.testTheStatsApi()],
       ['worldcup', !!this.config.worldcupApiKey, () => this.apiClient.testWorldCupApi()],
       ['apifootball', !!this.config.apifootballKey, () => this.apiClient.testApiFootball()]
     ];
@@ -2047,9 +2085,6 @@ class WorldBetAI {
   saveSessionPrefs() {}
 
   async init() {
-    // #region agent log
-    fetch('http://127.0.0.1:7369/ingest/98400584-96ec-4b04-879d-7b951a0d12c7',{method:'POST',headers:{'Content-Type':'application/json','X-Debug-Session-Id':'b20200'},body:JSON.stringify({sessionId:'b20200',location:'app-worldbet.js:init',message:'init started',data:{},timestamp:Date.now(),hypothesisId:'H1'})}).catch(()=>{});
-    // #endregion
     try {
       this.loadSessionPrefs();
       this.bindEvents();
@@ -2057,11 +2092,9 @@ class WorldBetAI {
       if (SupabaseClient.isConfigured()) {
         await this.auth.init();
         this.updateAuthHeader();
+        await this.initServerApis();
       }
       await this.loadAllFixtures();
-      // #region agent log
-      fetch('http://127.0.0.1:7369/ingest/98400584-96ec-4b04-879d-7b951a0d12c7',{method:'POST',headers:{'Content-Type':'application/json','X-Debug-Session-Id':'b20200'},body:JSON.stringify({sessionId:'b20200',location:'app-worldbet.js:init',message:'fixtures loaded, navigating dashboard',data:{fixtureCount:this.fixtures.length,loading:this.loading},timestamp:Date.now(),hypothesisId:'H3'})}).catch(()=>{});
-      // #endregion
       this.navigate('dashboard');
       this.updateFooter();
       this.startCountdown();
@@ -2103,9 +2136,6 @@ class WorldBetAI {
       this.showToast(err.message || 'Error al cargar predicciones');
     } finally {
       this.predictionsLoading = false;
-      // #region agent log
-      fetch('http://127.0.0.1:7369/ingest/98400584-96ec-4b04-879d-7b951a0d12c7',{method:'POST',headers:{'Content-Type':'application/json','X-Debug-Session-Id':'b20200'},body:JSON.stringify({sessionId:'b20200',location:'app-worldbet.js:bootstrapData',message:'bootstrapData finished',data:{predictionCount:Object.keys(this.predictions).length},timestamp:Date.now(),hypothesisId:'H4'})}).catch(()=>{});
-      // #endregion
       this.render();
     }
   }
@@ -3291,10 +3321,15 @@ class WorldBetAI {
       ${this.renderAuthSettingsCard()}
       <div class="card settings-form">
         <p style="color:var(--color-text-muted);margin-bottom:var(--space-4);font-size:var(--text-sm)">
-          Las API keys se cargan desde variables de entorno en el build, o puedes configurarlas aquí (solo memoria de sesión).
+          ${this.serverTheStats
+            ? 'TheStatsAPI está configurada en el servidor (Supabase). Para cambiarla, edita la tabla <code>app_config</code> en el SQL Editor.'
+            : 'Las API keys opcionales se cargan desde el build o puedes configurarlas aquí (solo memoria de sesión).'}
         </p>
         <div class="form-group"><label>TheStatsAPI Key</label>
-          <input type="password" id="cfg-thestats" value="${escapeHtml(this.config.thestatsapiKey)}" autocomplete="off"></div>
+          ${this.serverTheStats
+            ? '<p style="font-size:var(--text-sm);color:var(--color-success)">Conectada vía servidor ✓</p>'
+            : `<input type="password" id="cfg-thestats" value="${escapeHtml(this.config.thestatsapiKey)}" autocomplete="off">`}
+        </div>
         <div class="form-group"><label>WorldCupAPI Key</label>
           <input type="password" id="cfg-worldcup" value="${escapeHtml(this.config.worldcupApiKey)}" autocomplete="off"></div>
         <p style="font-size:var(--text-sm);color:var(--color-text-muted);margin-bottom:var(--space-4)">
@@ -3622,7 +3657,7 @@ class WorldBetAI {
   }
 
   async saveConfig() {
-    this.config.thestatsapiKey = document.getElementById('cfg-thestats').value;
+    this.config.thestatsapiKey = document.getElementById('cfg-thestats')?.value ?? this.config.thestatsapiKey;
     this.config.worldcupApiKey = document.getElementById('cfg-worldcup').value;
     this.config.apifootballKey = document.getElementById('cfg-apifootball').value;
     this.config.corsProxy = document.getElementById('cfg-proxy').value;

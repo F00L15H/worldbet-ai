@@ -47,10 +47,20 @@ class WorldBetAI {
     this.authModalOpen = false;
     this.betFilter = '';
     this.predictionsLoading = false;
+    this.serverTheStats = false;
   }
 
   hasConfiguredKeys() {
-    return !!(this.config.thestatsapiKey || this.config.apifootballKey || this.config.worldcupApiKey);
+    return !!(this.serverTheStats || this.config.thestatsapiKey || this.config.apifootballKey || this.config.worldcupApiKey);
+  }
+
+  async initServerApis() {
+    if (!SupabaseClient.isConfigured()) return;
+    const r = await SupabaseClient.invokeTheStats('status');
+    if (r.ok && r.data?.configured && r.data?.healthy) {
+      this.serverTheStats = true;
+      this.config.useThestatsProxy = true;
+    }
   }
 
   apiTrustLabels() {
@@ -68,7 +78,7 @@ class WorldBetAI {
 
     const labels = this.apiTrustLabels();
     const entries = [
-      ['thestats', !!this.config.thestatsapiKey, () => this.apiClient.testTheStatsApi()],
+      ['thestats', this.serverTheStats || !!this.config.thestatsapiKey, () => this.apiClient.testTheStatsApi()],
       ['worldcup', !!this.config.worldcupApiKey, () => this.apiClient.testWorldCupApi()],
       ['apifootball', !!this.config.apifootballKey, () => this.apiClient.testApiFootball()]
     ];
@@ -113,9 +123,6 @@ class WorldBetAI {
   saveSessionPrefs() {}
 
   async init() {
-    // #region agent log
-    fetch('http://127.0.0.1:7369/ingest/98400584-96ec-4b04-879d-7b951a0d12c7',{method:'POST',headers:{'Content-Type':'application/json','X-Debug-Session-Id':'b20200'},body:JSON.stringify({sessionId:'b20200',location:'app-worldbet.js:init',message:'init started',data:{},timestamp:Date.now(),hypothesisId:'H1'})}).catch(()=>{});
-    // #endregion
     try {
       this.loadSessionPrefs();
       this.bindEvents();
@@ -123,11 +130,9 @@ class WorldBetAI {
       if (SupabaseClient.isConfigured()) {
         await this.auth.init();
         this.updateAuthHeader();
+        await this.initServerApis();
       }
       await this.loadAllFixtures();
-      // #region agent log
-      fetch('http://127.0.0.1:7369/ingest/98400584-96ec-4b04-879d-7b951a0d12c7',{method:'POST',headers:{'Content-Type':'application/json','X-Debug-Session-Id':'b20200'},body:JSON.stringify({sessionId:'b20200',location:'app-worldbet.js:init',message:'fixtures loaded, navigating dashboard',data:{fixtureCount:this.fixtures.length,loading:this.loading},timestamp:Date.now(),hypothesisId:'H3'})}).catch(()=>{});
-      // #endregion
       this.navigate('dashboard');
       this.updateFooter();
       this.startCountdown();
@@ -169,9 +174,6 @@ class WorldBetAI {
       this.showToast(err.message || 'Error al cargar predicciones');
     } finally {
       this.predictionsLoading = false;
-      // #region agent log
-      fetch('http://127.0.0.1:7369/ingest/98400584-96ec-4b04-879d-7b951a0d12c7',{method:'POST',headers:{'Content-Type':'application/json','X-Debug-Session-Id':'b20200'},body:JSON.stringify({sessionId:'b20200',location:'app-worldbet.js:bootstrapData',message:'bootstrapData finished',data:{predictionCount:Object.keys(this.predictions).length},timestamp:Date.now(),hypothesisId:'H4'})}).catch(()=>{});
-      // #endregion
       this.render();
     }
   }
@@ -1357,10 +1359,15 @@ class WorldBetAI {
       ${this.renderAuthSettingsCard()}
       <div class="card settings-form">
         <p style="color:var(--color-text-muted);margin-bottom:var(--space-4);font-size:var(--text-sm)">
-          Las API keys se cargan desde variables de entorno en el build, o puedes configurarlas aquí (solo memoria de sesión).
+          ${this.serverTheStats
+            ? 'TheStatsAPI está configurada en el servidor (Supabase). Para cambiarla, edita la tabla <code>app_config</code> en el SQL Editor.'
+            : 'Las API keys opcionales se cargan desde el build o puedes configurarlas aquí (solo memoria de sesión).'}
         </p>
         <div class="form-group"><label>TheStatsAPI Key</label>
-          <input type="password" id="cfg-thestats" value="${escapeHtml(this.config.thestatsapiKey)}" autocomplete="off"></div>
+          ${this.serverTheStats
+            ? '<p style="font-size:var(--text-sm);color:var(--color-success)">Conectada vía servidor ✓</p>'
+            : `<input type="password" id="cfg-thestats" value="${escapeHtml(this.config.thestatsapiKey)}" autocomplete="off">`}
+        </div>
         <div class="form-group"><label>WorldCupAPI Key</label>
           <input type="password" id="cfg-worldcup" value="${escapeHtml(this.config.worldcupApiKey)}" autocomplete="off"></div>
         <p style="font-size:var(--text-sm);color:var(--color-text-muted);margin-bottom:var(--space-4)">
@@ -1688,7 +1695,7 @@ class WorldBetAI {
   }
 
   async saveConfig() {
-    this.config.thestatsapiKey = document.getElementById('cfg-thestats').value;
+    this.config.thestatsapiKey = document.getElementById('cfg-thestats')?.value ?? this.config.thestatsapiKey;
     this.config.worldcupApiKey = document.getElementById('cfg-worldcup').value;
     this.config.apifootballKey = document.getElementById('cfg-apifootball').value;
     this.config.corsProxy = document.getElementById('cfg-proxy').value;

@@ -226,11 +226,22 @@ class ApiClient {
     return demoFallback;
   }
   async loadAllFixtures() {
+    if (this.config.useThestatsProxy && typeof SupabaseClient !== 'undefined') {
+      const r = await SupabaseClient.invokeTheStats('fixtures');
+      if (r.ok && r.data?.fixtures) return r.data.fixtures;
+      if (r.ok && Array.isArray(r.data)) return r.data;
+    }
     const data = await this.fetchApi(FIXTURES_URL, {}, { ttlMs: 60 * 60 * 1000 });
     return data?.fixtures || data || [];
   }
   needsProxy() { return !!this.config.corsProxy; }
   async fetchMatchStats(matchId) {
+    if (this.config.useThestatsProxy && typeof SupabaseClient !== 'undefined') {
+      const r = await SupabaseClient.invokeTheStats('match-stats', { matchId });
+      if (r.ok && r.data?.data) return r.data.data;
+      if (r.ok && r.data) return r.data;
+      return null;
+    }
     if (!this.config.thestatsapiKey) return null;
     return this.fetchApi(`${THESTATSAPI_BASE}/football/matches/${matchId}/stats`, {
       headers: { Authorization: `Bearer ${this.config.thestatsapiKey}` }
@@ -315,6 +326,11 @@ class ApiClient {
     return result.marketHomeOdds ? result : null;
   }
   async testTheStatsApi() {
+    if (this.config.useThestatsProxy && typeof SupabaseClient !== 'undefined') {
+      const r = await SupabaseClient.invokeTheStats('health');
+      const ok = r.ok && (r.data?.status === 'healthy' || r.data?.ok);
+      return { ok, msg: ok ? 'healthy (servidor)' : (r.error || r.data?.status || 'Sin respuesta') };
+    }
     if (!this.config.thestatsapiKey) return { ok: false, msg: 'Sin API key' };
     const d = await this.fetchApi(`${THESTATSAPI_BASE}/health`, {
       headers: { Authorization: `Bearer ${this.config.thestatsapiKey}` }

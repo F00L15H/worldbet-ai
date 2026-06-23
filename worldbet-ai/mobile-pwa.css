@@ -1,7 +1,7 @@
 /* PWA + iPhone native feel */
 :root {
   --header-h: 52px;
-  --bottom-nav-content-h: 46px;
+  --bottom-nav-content-h: 50px;
   --safe-top: env(safe-area-inset-top, 0px);
   --safe-bottom: env(safe-area-inset-bottom, 0px);
   --bottom-nav-h: calc(var(--bottom-nav-content-h) + var(--safe-bottom));
@@ -55,19 +55,27 @@ input, select, textarea, .filters input, .filters select, .form-group input, .fo
 /* Bottom navigation (mobile) */
 .bottom-nav {
   display: none; position: fixed; bottom: 0; left: 0; right: 0; z-index: 110;
-  height: var(--bottom-nav-h);
-  padding-bottom: var(--safe-bottom);
-  box-sizing: border-box;
-  background: var(--color-surface); border-top: 1px solid var(--color-border);
   grid-template-columns: repeat(4, 1fr); align-items: center;
+  min-height: var(--bottom-nav-content-h);
+  padding-bottom: var(--safe-bottom);
+  background: transparent;
+  border: none;
+}
+.bottom-nav::before {
+  content: ''; position: absolute; left: 0; right: 0; top: 0;
+  height: var(--bottom-nav-content-h);
+  background: var(--color-surface);
+  border-top: 1px solid var(--color-border);
+  pointer-events: none;
 }
 .bottom-nav-item {
+  position: relative; z-index: 1;
   display: flex; flex-direction: column; align-items: center; justify-content: center;
-  gap: 1px; font-size: 9px; line-height: 1.1; color: var(--color-text-muted);
-  min-height: 0; height: 100%; max-height: var(--bottom-nav-content-h);
-  padding: 4px 2px 2px; transition: var(--transition-interactive);
+  gap: 2px; font-size: 10px; line-height: 1.1; color: var(--color-text-muted);
+  min-height: var(--bottom-nav-content-h);
+  padding: 4px 2px; transition: var(--transition-interactive);
 }
-.bottom-nav-item i, .bottom-nav-item svg { width: 20px; height: 20px; }
+.bottom-nav-item i, .bottom-nav-item svg { width: 22px; height: 22px; }
 .bottom-nav-item.active { color: var(--color-primary); font-weight: 600; }
 
 /* Mobile cards for tables */

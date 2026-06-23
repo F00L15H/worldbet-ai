@@ -27,15 +27,19 @@ const SupabaseClient = {
     return this._client;
   },
 
-  async invokeFunction(name) {
+  async invokeFunction(name, body = {}) {
     const client = this.getClient();
     if (!client) return { ok: false, error: 'Supabase no configurado' };
     try {
-      const { data, error } = await client.functions.invoke(name, { body: {} });
+      const { data, error } = await client.functions.invoke(name, { body });
       if (error) return { ok: false, error: error.message };
       return { ok: true, data };
     } catch (e) {
       return { ok: false, error: e.message };
     }
+  },
+
+  async invokeTheStats(action, params = {}) {
+    return this.invokeFunction('thestats-api', { action, ...params });
   }
 };

@@ -9,19 +9,36 @@ En el SQL Editor de Supabase, ejecuta en orden el contenido de cada archivo:
 2. `supabase/migrations/003_match_odds.sql` — tabla de cuotas en vivo
 3. `supabase/migrations/004_bankroll_10k.sql` — bankroll inicial €10.000 (histórico; omitir si partes de cero)
 4. `supabase/migrations/005_bankroll_cop_1m.sql` — moneda COP, bankroll $1.000.000, borrado de apuestas previas
+5. `supabase/migrations/006_app_config.sql` — tabla `app_config` para API keys del servidor
 
-Si ya ejecutaste `001` antes, basta con aplicar `003` y `005` (o `004` + `005` si venías de la versión en euros).
+Si ya ejecutaste `001` antes, basta con aplicar `003`, `005` y `006`.
 
-## 3. Configurar secrets
+### Configurar TheStatsAPI en Supabase (recomendado)
+
+Tras la migración `006`, guarda la clave en el SQL Editor (no en el código del cliente):
+
+```sql
+INSERT INTO public.app_config (key, value)
+VALUES ('thestats_api_key', 'TU_CLAVE_THESTATSAPI')
+ON CONFLICT (key) DO UPDATE
+  SET value = EXCLUDED.value, updated_at = now();
+```
+
+Para rotar la clave, ejecuta el mismo `UPDATE` con el nuevo valor.
+
+## 3. Configurar secrets (opcional, alternativa a app_config)
 ```bash
 supabase secrets set THESTATSAPI_KEY=xxx ODDS_API_KEY=xxx CRON_SECRET=xxx
 ```
+
+La Edge Function `thestats-api` usa primero `app_config`, luego el secret `THESTATSAPI_KEY`.
 
 ## 4. Desplegar functions
 ```bash
 supabase functions deploy sync-matches
 supabase functions deploy settle-bets
 supabase functions deploy compute-snapshots
+supabase functions deploy thestats-api
 ```
 
 ## 5. Programar cron (SQL Editor, con pg_cron + pg_net habilitados)

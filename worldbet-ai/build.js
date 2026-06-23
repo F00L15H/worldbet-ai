@@ -51,7 +51,7 @@ const wb = fs.readFileSync(path.join(dir, 'app-worldbet.js'), 'utf8');
 const mobilePwaCss = fs.readFileSync(path.join(dir, 'mobile-pwa.css'), 'utf8');
 
 const configScript = `window.SUPABASE_CONFIG = ${JSON.stringify({ url: env.supabaseUrl, anonKey: env.supabaseAnonKey })};\nwindow.API_KEYS = ${JSON.stringify({
-  thestatsapi: env.thestatsapiKey,
+  thestatsapi: '',
   apifootball: env.apifootballKey,
   worldcup: env.worldcupApiKey
 })};`;
