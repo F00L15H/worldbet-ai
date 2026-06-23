@@ -82,7 +82,12 @@ function normalizeTeamName(name) {
 function teamsMatch(a, b) {
   return normalizeTeamName(a).toLowerCase() === normalizeTeamName(b).toLowerCase();
 }
-function euro(n) { return '€' + Number(n).toLocaleString('es-ES', { minimumFractionDigits:2, maximumFractionDigits:2 }); }
+const DEFAULT_BANKROLL = 1000000;
+function formatMoney(n) {
+  return new Intl.NumberFormat('es-CO', {
+    style: 'currency', currency: 'COP', maximumFractionDigits: 0
+  }).format(Number(n) || 0);
+}
 
 // ========== DEMO DATA GENERATOR ==========
 const DemoDataGenerator = {
@@ -653,7 +658,7 @@ const PredictionEngine = {
       : { label: `Primer gol: ${fixture.awayTeam}`, prob: fg.awayFirst };
     const primary = this.pickPrimaryBet(fixture, result, picks);
     const primaryKelly = picks.find(x => x.label === primary.label)?.kelly
-      || this.kellyCriterion(primary.prob, primary.odds, result.data.bankroll || 10000, 0.25);
+      || this.kellyCriterion(primary.prob, primary.odds, result.data.bankroll || DEFAULT_BANKROLL, 0.25);
     const altPicks = picks
       .filter(pick => pick.label !== primary.label)
       .slice(0, 6);

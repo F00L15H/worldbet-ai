@@ -49,7 +49,7 @@ class AuthManager {
     if (!error && data) {
       this.profile = data;
       if (this.app?.config) {
-        this.app.config.bankroll = parseFloat(data.bankroll) || 10000;
+        this.app.config.bankroll = parseFloat(data.bankroll) || DEFAULT_BANKROLL;
         if (this.app.updateBankrollDisplay) this.app.updateBankrollDisplay();
       }
     }

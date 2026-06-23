@@ -7,9 +7,10 @@ En el SQL Editor de Supabase, ejecuta en orden el contenido de cada archivo:
 
 1. `supabase/migrations/001_initial.sql` — esquema base (perfiles, apuestas, etc.)
 2. `supabase/migrations/003_match_odds.sql` — tabla de cuotas en vivo
-3. `supabase/migrations/004_bankroll_10k.sql` — bankroll inicial €10.000 (nuevos y existentes)
+3. `supabase/migrations/004_bankroll_10k.sql` — bankroll inicial €10.000 (histórico; omitir si partes de cero)
+4. `supabase/migrations/005_bankroll_cop_1m.sql` — moneda COP, bankroll $1.000.000, borrado de apuestas previas
 
-Si ya ejecutaste `001` antes, basta con aplicar `003` y `004`.
+Si ya ejecutaste `001` antes, basta con aplicar `003` y `005` (o `004` + `005` si venías de la versión en euros).
 
 ## 3. Configurar secrets
 ```bash

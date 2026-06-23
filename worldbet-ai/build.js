@@ -278,7 +278,7 @@ ${mobilePwaCss}
           <span id="api-status-text">DEMO</span>
         </div>
         <div id="auth-header"></div>
-        <span class="bankroll-chip" id="bankroll-quick" aria-label="Bankroll virtual">€10.000</span>
+        <span class="bankroll-chip" id="bankroll-quick" aria-label="Bankroll virtual">$ 1.000.000</span>
       </div>
     </header>
     <div class="layout">
