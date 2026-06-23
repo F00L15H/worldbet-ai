@@ -1,0 +1,17 @@
+# Logs y artefactos locales
+.playwright-mcp/
+*.log
+
+# Entorno / secretos
+.env
+.env.*
+*.pem
+
+# Node (si se añade tooling)
+node_modules/
+
+# OS / editor
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/
