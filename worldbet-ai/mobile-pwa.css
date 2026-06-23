@@ -273,3 +273,6 @@ input, select, textarea, .filters input, .filters select, .form-group input, .fo
 @media (display-mode: standalone) {
   .install-banner { display: none !important; }
 }
+
+.user-bets-section { margin-bottom: var(--space-6); }
+.user-bets-section--compact .user-bets-kpi-compact { grid-template-columns: repeat(2, 1fr); }

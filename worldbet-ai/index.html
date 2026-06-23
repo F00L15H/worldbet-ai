@@ -471,6 +471,9 @@ input, select, textarea, .filters input, .filters select, .form-group input, .fo
   .install-banner { display: none !important; }
 }
 
+.user-bets-section { margin-bottom: var(--space-6); }
+.user-bets-section--compact .user-bets-kpi-compact { grid-template-columns: repeat(2, 1fr); }
+
   </style>
 </head>
 <body>
@@ -3035,12 +3038,101 @@ class WorldBetAI {
       </article>`;
   }
 
+  renderUserBetRow(b) {
+    const m = b.matches || {};
+    const matchLabel = m.home_team ? `${m.home_team} vs ${m.away_team}` : b.match_id;
+    const pl = b.status === 'won' ? `+${euro(b.payout)}` : b.status === 'lost' ? `-${euro(b.stake)}` : '—';
+    const resultSuffix = m.status === 'finished' && m.home_score != null ? `<br><small>${m.home_score}-${m.away_score}</small>` : '';
+    return {
+      matchLabel,
+      pl,
+      tableRow: `<tr>
+        <td>${escapeHtml(matchLabel)}${resultSuffix}</td>
+        <td>${escapeHtml(b.market_label)}</td>
+        <td>${Number(b.odds).toFixed(2)}</td>
+        <td>${euro(b.stake)}</td>
+        <td class="${this.bets.statusClass(b.status)}">${this.bets.statusLabel(b.status)}</td>
+        <td class="${this.bets.statusClass(b.status)}">${pl}</td>
+        <td>${new Date(b.placed_at).toLocaleDateString('es-ES')}</td>
+      </tr>`,
+      mobileCard: `<div class="bet-card">
+        <strong>${escapeHtml(matchLabel)}</strong>
+        ${m.status === 'finished' && m.home_score != null ? `<div class="bet-card-row"><span>Resultado</span><span>${m.home_score}-${m.away_score}</span></div>` : ''}
+        <div class="bet-card-row"><span>Mercado</span><span>${escapeHtml(b.market_label)}</span></div>
+        <div class="bet-card-row"><span>Cuota</span><span class="rec-odds-big" style="font-size:var(--text-lg)">${Number(b.odds).toFixed(2)}</span></div>
+        <div class="bet-card-row"><span>Stake</span><span>${euro(b.stake)}</span></div>
+        <div class="bet-card-row"><span>Estado</span><span class="${this.bets.statusClass(b.status)}">${this.bets.statusLabel(b.status)}</span></div>
+        <div class="bet-card-row"><span>P/L</span><span class="${this.bets.statusClass(b.status)}">${pl}</span></div>
+        <div class="bet-card-row"><span>Fecha</span><span>${new Date(b.placed_at).toLocaleDateString('es-ES')}</span></div>
+      </div>`
+    };
+  }
+
+  renderUserBetsSection({ compact = false } = {}) {
+    if (!SupabaseClient.isConfigured()) {
+      return `<section class="user-bets-section">
+        <h2 class="card-title">Tus apuestas</h2>
+        <p style="color:var(--color-text-muted);font-size:var(--text-sm)">Backend no configurado</p>
+      </section>`;
+    }
+    if (!this.auth.isLoggedIn) {
+      return `<section class="user-bets-section">
+        <h2 class="card-title">Tus apuestas</h2>
+        <div class="empty-state card" style="padding:var(--space-4)">
+          <p>Inicia sesión para ver tus apuestas</p>
+          <button class="btn btn-primary" id="btn-dash-login" type="button">Entrar</button>
+        </div>
+      </section>`;
+    }
+    const stats = this.bets.getStats();
+    let bets = [...this.bets.userBets];
+    if (this.betFilter) bets = bets.filter(b => b.status === this.betFilter);
+    const kpiGrid = compact
+      ? `<div class="kpi-grid user-bets-kpi-compact" style="margin-bottom:var(--space-4)">
+          <div class="kpi-card"><div class="kpi-label">Bankroll</div><div class="kpi-value">${euro(this.auth.profile?.bankroll ?? this.config.bankroll)}</div></div>
+          <div class="kpi-card"><div class="kpi-label">Pendientes</div><div class="kpi-value">${stats.pending}</div></div>
+        </div>`
+      : `<div class="kpi-grid" style="margin-bottom:var(--space-4)">
+          <div class="kpi-card"><div class="kpi-label">Bankroll</div><div class="kpi-value">${euro(this.auth.profile?.bankroll ?? this.config.bankroll)}</div></div>
+          <div class="kpi-card"><div class="kpi-label">Ganadas</div><div class="kpi-value value-high">${stats.won}</div></div>
+          <div class="kpi-card"><div class="kpi-label">Perdidas</div><div class="kpi-value value-low">${stats.lost}</div></div>
+          <div class="kpi-card"><div class="kpi-label">Pendientes</div><div class="kpi-value">${stats.pending}</div></div>
+        </div>`;
+    const rows = bets.map(b => this.renderUserBetRow(b));
+    return `<section class="user-bets-section${compact ? ' user-bets-section--compact' : ''}">
+      <h2 class="card-title">Tus apuestas</h2>
+      ${kpiGrid}
+      <div class="filters">
+        <select id="bet-filter-status">
+          <option value="">Todas</option>
+          <option value="pending" ${this.betFilter==='pending'?'selected':''}>Pendientes</option>
+          <option value="won" ${this.betFilter==='won'?'selected':''}>Ganadas</option>
+          <option value="lost" ${this.betFilter==='lost'?'selected':''}>Perdidas</option>
+        </select>
+        <button class="btn btn-outline" id="btn-refresh-bets" type="button">Actualizar</button>
+      </div>
+      ${bets.length ? `
+        <div class="card table-wrap desktop-only">
+          <table>
+            <thead><tr><th>Partido</th><th>Mercado</th><th>Cuota</th><th>Stake</th><th>Estado</th><th>P/L</th><th>Fecha</th></tr></thead>
+            <tbody>${rows.map(r => r.tableRow).join('')}</tbody>
+          </table>
+        </div>
+        <div class="mobile-cards">${rows.map(r => r.mobileCard).join('')}</div>` : '<div class="empty-state card"><p>No tienes apuestas aún. Abre un partido y pulsa Guardar apuesta.</p></div>'}
+    </section>`;
+  }
+
   renderValueBets() {
     let bets = [...this.valueBets];
     if (this.vbFilters.confidence) bets = bets.filter(b => b.confidence === this.vbFilters.confidence);
     if (this.vbFilters.stage) bets = bets.filter(b => b.stage === this.vbFilters.stage);
+    const userBetMatchIds = new Set(this.auth.isLoggedIn ? this.bets.getUserBetMatchIds() : []);
+    const alreadyBetBadge = (matchId) => userBetMatchIds.has(matchId)
+      ? ' <span class="badge badge-tbd">Ya apostaste</span>' : '';
     return `
-      <h1 class="view-title">Apuestas Recomendadas</h1>
+      <h1 class="view-title">Apuestas</h1>
+      ${this.renderUserBetsSection({ compact: true })}
+      <h2 class="card-title" style="margin-top:var(--space-2)">Recomendadas del modelo</h2>
       <p style="color:var(--color-text-muted);margin-bottom:var(--space-4);font-size:var(--text-sm)">Basadas en el análisis Poisson + xG + datos de las APIs. No comparan value vs mercado.</p>
       <div class="filters">
         <select id="vb-confidence">
@@ -3060,7 +3152,7 @@ class WorldBetAI {
             </tr></thead>
             <tbody>${bets.map(b => `
               <tr>
-                <td>${escapeHtml(b.match)}</td>
+                <td>${escapeHtml(b.match)}${alreadyBetBadge(b.matchId)}</td>
                 <td>${escapeHtml(b.market)}</td>
                 <td>${b.odds.toFixed(2)}</td>
                 <td>${pct(b.prob)}</td>
@@ -3073,7 +3165,7 @@ class WorldBetAI {
         </div>
         <div class="mobile-cards">${bets.map(b => `
           <div class="vb-card">
-            <strong>${escapeHtml(b.match)}</strong>
+            <strong>${escapeHtml(b.match)}</strong>${alreadyBetBadge(b.matchId)}
             <div class="bet-card-row"><span>Mercado</span><span>${escapeHtml(b.market)}</span></div>
             <div class="bet-card-row"><span>Cuota</span><span class="rec-odds-big" style="font-size:var(--text-lg)">${b.odds.toFixed(2)}</span></div>
             <div class="bet-card-row"><span>Prob. modelo</span><span>${pct(b.prob)}</span></div>
@@ -3085,70 +3177,7 @@ class WorldBetAI {
   }
 
   renderMyBets() {
-    if (!SupabaseClient.isConfigured()) {
-      return `<h1 class="view-title">Mis Apuestas</h1><div class="empty-state card"><p>Backend no configurado</p></div>`;
-    }
-    if (!this.auth.isLoggedIn) {
-      return `<h1 class="view-title">Mis Apuestas</h1>
-        <div class="empty-state card"><p>Inicia sesión para ver tus apuestas</p>
-        <button class="btn btn-primary" id="btn-dash-login" type="button">Entrar</button></div>`;
-    }
-    const stats = this.bets.getStats();
-    let bets = [...this.bets.userBets];
-    if (this.betFilter) bets = bets.filter(b => b.status === this.betFilter);
-    return `
-      <h1 class="view-title">Mis Apuestas</h1>
-      <div class="kpi-grid" style="margin-bottom:var(--space-4)">
-        <div class="kpi-card"><div class="kpi-label">Bankroll</div><div class="kpi-value">${euro(this.auth.profile?.bankroll ?? this.config.bankroll)}</div></div>
-        <div class="kpi-card"><div class="kpi-label">Ganadas</div><div class="kpi-value value-high">${stats.won}</div></div>
-        <div class="kpi-card"><div class="kpi-label">Perdidas</div><div class="kpi-value value-low">${stats.lost}</div></div>
-        <div class="kpi-card"><div class="kpi-label">Pendientes</div><div class="kpi-value">${stats.pending}</div></div>
-      </div>
-      <div class="filters">
-        <select id="bet-filter-status">
-          <option value="">Todas</option>
-          <option value="pending" ${this.betFilter==='pending'?'selected':''}>Pendientes</option>
-          <option value="won" ${this.betFilter==='won'?'selected':''}>Ganadas</option>
-          <option value="lost" ${this.betFilter==='lost'?'selected':''}>Perdidas</option>
-        </select>
-        <button class="btn btn-outline" id="btn-refresh-bets" type="button">Actualizar</button>
-      </div>
-      ${bets.length ? `
-        <div class="card table-wrap desktop-only">
-          <table>
-            <thead><tr><th>Partido</th><th>Mercado</th><th>Cuota</th><th>Stake</th><th>Estado</th><th>P/L</th><th>Fecha</th></tr></thead>
-            <tbody>${bets.map(b => {
-              const m = b.matches || {};
-              const matchLabel = m.home_team ? `${m.home_team} vs ${m.away_team}` : b.match_id;
-              const pl = b.status === 'won' ? `+${euro(b.payout)}` : b.status === 'lost' ? `-${euro(b.stake)}` : '—';
-              return `<tr>
-                <td>${escapeHtml(matchLabel)}${m.status === 'finished' && m.home_score != null ? `<br><small>${m.home_score}-${m.away_score}</small>` : ''}</td>
-                <td>${escapeHtml(b.market_label)}</td>
-                <td>${Number(b.odds).toFixed(2)}</td>
-                <td>${euro(b.stake)}</td>
-                <td class="${this.bets.statusClass(b.status)}">${this.bets.statusLabel(b.status)}</td>
-                <td class="${this.bets.statusClass(b.status)}">${pl}</td>
-                <td>${new Date(b.placed_at).toLocaleDateString('es-ES')}</td>
-              </tr>`;
-            }).join('')}</tbody>
-          </table>
-        </div>
-        <div class="mobile-cards">${bets.map(b => {
-          const m = b.matches || {};
-          const matchLabel = m.home_team ? `${m.home_team} vs ${m.away_team}` : b.match_id;
-          const pl = b.status === 'won' ? `+${euro(b.payout)}` : b.status === 'lost' ? `-${euro(b.stake)}` : '—';
-          return `<div class="bet-card">
-            <strong>${escapeHtml(matchLabel)}</strong>
-            ${m.status === 'finished' && m.home_score != null ? `<div class="bet-card-row"><span>Resultado</span><span>${m.home_score}-${m.away_score}</span></div>` : ''}
-            <div class="bet-card-row"><span>Mercado</span><span>${escapeHtml(b.market_label)}</span></div>
-            <div class="bet-card-row"><span>Cuota</span><span class="rec-odds-big" style="font-size:var(--text-lg)">${Number(b.odds).toFixed(2)}</span></div>
-            <div class="bet-card-row"><span>Stake</span><span>${euro(b.stake)}</span></div>
-            <div class="bet-card-row"><span>Estado</span><span class="${this.bets.statusClass(b.status)}">${this.bets.statusLabel(b.status)}</span></div>
-            <div class="bet-card-row"><span>P/L</span><span class="${this.bets.statusClass(b.status)}">${pl}</span></div>
-            <div class="bet-card-row"><span>Fecha</span><span>${new Date(b.placed_at).toLocaleDateString('es-ES')}</span></div>
-          </div>`;
-        }).join('')}</div>` : '<div class="empty-state card"><p>No tienes apuestas aún. Abre un partido y pulsa Guardar apuesta.</p></div>'}
-    `;
+    return `<h1 class="view-title">Mis Apuestas</h1>${this.renderUserBetsSection({ compact: false })}`;
   }
 
   renderHistory() {
@@ -3457,6 +3486,7 @@ class WorldBetAI {
         await this.auth.loadProfile();
         this.updateBankrollDisplay();
         updateBet();
+        if (this.currentView === 'valuebets' || this.currentView === 'mybets') this.render();
       } catch (e) {
         this.showToast(e.message);
       }
