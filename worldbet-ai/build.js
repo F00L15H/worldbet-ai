@@ -87,22 +87,15 @@ const shell = `<!DOCTYPE html>
       --content-default: 1200px; --content-wide: 1400px;
       --sidebar-w: 240px;
     }
-    [data-theme="light"] {
-      --color-bg: #f0f4f8; --color-surface: #ffffff; --color-surface-2: #f8fafc;
-      --color-surface-offset: #eef2f7; --color-surface-dynamic: #e5eaf2;
-      --color-divider: #dde3ed; --color-border: #c8d0e0;
-      --color-text: #1a1f2e; --color-text-muted: #4a5570; --color-text-faint: #8892aa;
-      --color-primary: #007a30; --color-primary-hover: #006028; --color-primary-highlight: #e6f5ec;
-      --color-gold: #cc9600; --color-gold-highlight: #fff8e1;
-      --shadow-sm: 0 1px 3px rgba(0,0,0,0.08); --shadow-md: 0 4px 16px rgba(0,0,0,0.1);
-      --shadow-lg: 0 12px 40px rgba(0,0,0,0.15); --shadow-glow: 0 0 20px rgba(0,122,48,0.15);
-    }
     *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
     html { scroll-behavior: smooth; }
     body { font-family: var(--font-body); font-size: var(--text-base); color: var(--color-text); background: var(--color-bg); line-height: 1.5; min-height: 100vh; }
     h1,h2,h3,h4 { font-family: var(--font-display); font-weight: 600; letter-spacing: 0.02em; }
     button, input, select, textarea { font-family: inherit; font-size: inherit; }
     button { cursor: pointer; border: none; background: none; min-height: 44px; }
+    input[type="number"]::-webkit-inner-spin-button,
+    input[type="number"]::-webkit-outer-spin-button { -webkit-appearance: none; margin: 0; }
+    input[type="number"] { -moz-appearance: textfield; appearance: textfield; }
     a { color: var(--color-primary); }
     img { max-width: 100%; display: block; }
     .app { display: flex; flex-direction: column; min-height: 100vh; }
@@ -123,6 +116,12 @@ const shell = `<!DOCTYPE html>
     @keyframes trustGlow { 0%, 100% { box-shadow: 0 0 8px rgba(255,215,0,0.5); } 50% { box-shadow: 0 0 14px rgba(255,215,0,0.9); } }
     @keyframes pulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.45; } }
     .bankroll-input { width: 90px; padding: var(--space-2); background: var(--color-surface-offset); border: 1px solid var(--color-border); border-radius: var(--radius-md); color: var(--color-text); }
+    .bankroll-chip {
+      display: inline-flex; align-items: center; padding: var(--space-1) var(--space-2);
+      background: var(--color-gold-highlight); border: 1px solid rgba(255,215,0,0.35);
+      border-radius: var(--radius-full); font-family: var(--font-display); font-size: var(--text-sm);
+      font-weight: 600; color: var(--color-gold); white-space: nowrap; user-select: none;
+    }
     .icon-btn { display: flex; align-items: center; justify-content: center; width: 44px; height: 44px; border-radius: var(--radius-md); color: var(--color-text-muted); transition: var(--transition-interactive); }
     .icon-btn:hover { background: var(--color-surface-offset); color: var(--color-text); }
     .hamburger { display: none; }
@@ -262,9 +261,7 @@ ${mobilePwaCss}
           <span id="api-status-text">DEMO</span>
         </div>
         <div id="auth-header"></div>
-        <label><span class="sr-only" style="position:absolute;width:1px;height:1px;overflow:hidden">Bankroll</span>
-          <input type="number" class="bankroll-input" id="bankroll-quick" value="1000" min="0" aria-label="Bankroll en euros"></label>
-        <button class="icon-btn" id="btn-theme" aria-label="Cambiar tema claro u oscuro"><i data-lucide="sun"></i></button>
+        <span class="bankroll-chip" id="bankroll-quick" aria-label="Bankroll virtual">€10.000</span>
       </div>
     </header>
     <div class="layout">

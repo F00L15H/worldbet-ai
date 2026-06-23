@@ -596,7 +596,7 @@ const PredictionEngine = {
       : { label: `Primer gol: ${fixture.awayTeam}`, prob: fg.awayFirst };
     const primary = this.pickPrimaryBet(fixture, result, picks);
     const primaryKelly = picks.find(x => x.label === primary.label)?.kelly
-      || this.kellyCriterion(primary.prob, primary.odds, result.data.bankroll || 1000, 0.25);
+      || this.kellyCriterion(primary.prob, primary.odds, result.data.bankroll || 10000, 0.25);
     const altPicks = picks
       .filter(pick => pick.label !== primary.label)
       .slice(0, 6);
@@ -693,7 +693,7 @@ const ChartManager = {
     if (this.instances[id]) { this.instances[id].destroy(); delete this.instances[id]; }
   },
   chartColors() {
-    const dark = document.documentElement.dataset.theme !== 'light';
+    const dark = true;
     return { text: dark ? '#8892aa' : '#4a5570', grid: dark ? '#2a3148' : '#dde3ed' };
   },
   createProbDoughnut(canvasId, probs, labels) {

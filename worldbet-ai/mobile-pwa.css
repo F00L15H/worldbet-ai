@@ -84,11 +84,15 @@ input, select, textarea, .filters input, .filters select, .form-group input, .fo
 .install-banner button { margin-top: var(--space-2); }
 
 /* Chart accordion (mobile modal) */
-.chart-accordion summary {
+.chart-accordion summary,
+.analysis-picks-more summary {
   cursor: pointer; font-weight: 600; padding: var(--space-3) 0;
   list-style: none; display: flex; justify-content: space-between; align-items: center;
+  color: var(--color-primary); font-size: var(--text-sm);
 }
-.chart-accordion summary::-webkit-details-marker { display: none; }
+.chart-accordion summary::-webkit-details-marker,
+.analysis-picks-more summary::-webkit-details-marker { display: none; }
+.analysis-picks-more { margin-top: var(--space-2); }
 
 @media (max-width: 768px) {
   .bottom-nav { display: grid; }
@@ -110,7 +114,11 @@ input, select, textarea, .filters input, .filters select, .form-group input, .fo
   #api-status-text { display: none; }
   .api-status { padding: var(--space-1); min-width: auto; }
   .bankroll-input { width: 72px; font-size: 14px !important; padding: 6px 8px; }
-  #auth-header span { display: none; }
+  .bankroll-chip { font-size: 12px; padding: 4px 8px; }
+  #auth-header { display: flex; align-items: center; gap: var(--space-1); flex-shrink: 0; }
+  #auth-header .auth-display-name { display: none; }
+  .header { flex-wrap: wrap; }
+  .header-actions { flex-wrap: wrap; row-gap: var(--space-1); max-width: 100%; }
   .kpi-grid { grid-template-columns: repeat(2, 1fr); gap: var(--space-3); }
   .kpi-value { font-size: var(--text-xl); }
   .grid-2 { grid-template-columns: 1fr; }

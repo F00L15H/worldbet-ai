@@ -49,9 +49,8 @@ class AuthManager {
     if (!error && data) {
       this.profile = data;
       if (this.app?.config) {
-        this.app.config.bankroll = parseFloat(data.bankroll) || 1000;
-        const el = document.getElementById('bankroll-quick');
-        if (el) el.value = this.app.config.bankroll;
+        this.app.config.bankroll = parseFloat(data.bankroll) || 10000;
+        if (this.app.updateBankrollDisplay) this.app.updateBankrollDisplay();
       }
     }
     return this.profile;
