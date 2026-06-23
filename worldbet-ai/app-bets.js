@@ -172,7 +172,7 @@ class BetsManager {
 
   statusClass(status) {
     return { pending: 'value-med', won: 'value-high', lost: 'value-low', void: '' }[status] || '';
-  },
+  }
 
   evaluateSnapshotHit(snapshot) {
     const m = snapshot.matches;
@@ -186,7 +186,7 @@ class BetsManager {
     );
     if (result === 'void') return null;
     return result === 'won';
-  },
+  }
 
   async computeModelBacktest(limit = 200) {
     const snapshots = await this.loadLatestSnapshots(limit);

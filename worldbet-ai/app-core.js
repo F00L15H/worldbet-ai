@@ -259,7 +259,7 @@ class ApiClient {
     const id2 = t2?.response?.[0]?.team?.id;
     if (!id1 || !id2) return null;
     return this.fetchApi(`${APIFOOTBALL_BASE}/fixtures/headtohead?h2h=${id1}-${id2}`, { headers }, { useProxy: true, ttlMs: 15 * 60 * 1000 });
-  },
+  }
   async fetchTeamStatistics(teamName, league = 1, season = 2026) {
     if (!this.config.apifootballKey) return null;
     const headers = { 'x-rapidapi-key': this.config.apifootballKey };
@@ -271,7 +271,7 @@ class ApiClient {
       { headers },
       { useProxy: true, ttlMs: 15 * 60 * 1000 }
     );
-  },
+  }
   parseTeamStatistics(apiResponse, leagueAvg = 1.35) {
     const s = apiResponse?.response;
     if (!s?.goals) return null;
@@ -285,7 +285,7 @@ class ApiClient {
       xgAgainst: ga * 0.92,
       played: s.fixtures?.played?.total || 0
     };
-  },
+  }
   parseOddsApiForMatch(events, homeTeam, awayTeam) {
     if (!Array.isArray(events)) return null;
     const match = events.find(e => teamsMatch(e.home_team, homeTeam) && teamsMatch(e.away_team, awayTeam));

@@ -113,6 +113,9 @@ class WorldBetAI {
   saveSessionPrefs() {}
 
   async init() {
+    // #region agent log
+    fetch('http://127.0.0.1:7369/ingest/98400584-96ec-4b04-879d-7b951a0d12c7',{method:'POST',headers:{'Content-Type':'application/json','X-Debug-Session-Id':'b20200'},body:JSON.stringify({sessionId:'b20200',location:'app-worldbet.js:init',message:'init started',data:{},timestamp:Date.now(),hypothesisId:'H1'})}).catch(()=>{});
+    // #endregion
     try {
       this.loadSessionPrefs();
       this.bindEvents();
@@ -122,6 +125,9 @@ class WorldBetAI {
         this.updateAuthHeader();
       }
       await this.loadAllFixtures();
+      // #region agent log
+      fetch('http://127.0.0.1:7369/ingest/98400584-96ec-4b04-879d-7b951a0d12c7',{method:'POST',headers:{'Content-Type':'application/json','X-Debug-Session-Id':'b20200'},body:JSON.stringify({sessionId:'b20200',location:'app-worldbet.js:init',message:'fixtures loaded, navigating dashboard',data:{fixtureCount:this.fixtures.length,loading:this.loading},timestamp:Date.now(),hypothesisId:'H3'})}).catch(()=>{});
+      // #endregion
       this.navigate('dashboard');
       this.updateFooter();
       this.startCountdown();
@@ -163,6 +169,9 @@ class WorldBetAI {
       this.showToast(err.message || 'Error al cargar predicciones');
     } finally {
       this.predictionsLoading = false;
+      // #region agent log
+      fetch('http://127.0.0.1:7369/ingest/98400584-96ec-4b04-879d-7b951a0d12c7',{method:'POST',headers:{'Content-Type':'application/json','X-Debug-Session-Id':'b20200'},body:JSON.stringify({sessionId:'b20200',location:'app-worldbet.js:bootstrapData',message:'bootstrapData finished',data:{predictionCount:Object.keys(this.predictions).length},timestamp:Date.now(),hypothesisId:'H4'})}).catch(()=>{});
+      // #endregion
       this.render();
     }
   }

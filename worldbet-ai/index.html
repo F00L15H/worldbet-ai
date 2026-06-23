@@ -795,7 +795,7 @@ class ApiClient {
     const id2 = t2?.response?.[0]?.team?.id;
     if (!id1 || !id2) return null;
     return this.fetchApi(`${APIFOOTBALL_BASE}/fixtures/headtohead?h2h=${id1}-${id2}`, { headers }, { useProxy: true, ttlMs: 15 * 60 * 1000 });
-  },
+  }
   async fetchTeamStatistics(teamName, league = 1, season = 2026) {
     if (!this.config.apifootballKey) return null;
     const headers = { 'x-rapidapi-key': this.config.apifootballKey };
@@ -807,7 +807,7 @@ class ApiClient {
       { headers },
       { useProxy: true, ttlMs: 15 * 60 * 1000 }
     );
-  },
+  }
   parseTeamStatistics(apiResponse, leagueAvg = 1.35) {
     const s = apiResponse?.response;
     if (!s?.goals) return null;
@@ -821,7 +821,7 @@ class ApiClient {
       xgAgainst: ga * 0.92,
       played: s.fixtures?.played?.total || 0
     };
-  },
+  }
   parseOddsApiForMatch(events, homeTeam, awayTeam) {
     if (!Array.isArray(events)) return null;
     const match = events.find(e => teamsMatch(e.home_team, homeTeam) && teamsMatch(e.away_team, awayTeam));
@@ -1741,7 +1741,7 @@ class BetsManager {
 
   statusClass(status) {
     return { pending: 'value-med', won: 'value-high', lost: 'value-low', void: '' }[status] || '';
-  },
+  }
 
   evaluateSnapshotHit(snapshot) {
     const m = snapshot.matches;
@@ -1755,7 +1755,7 @@ class BetsManager {
     );
     if (result === 'void') return null;
     return result === 'won';
-  },
+  }
 
   async computeModelBacktest(limit = 200) {
     const snapshots = await this.loadLatestSnapshots(limit);
@@ -2044,6 +2044,9 @@ class WorldBetAI {
   saveSessionPrefs() {}
 
   async init() {
+    // #region agent log
+    fetch('http://127.0.0.1:7369/ingest/98400584-96ec-4b04-879d-7b951a0d12c7',{method:'POST',headers:{'Content-Type':'application/json','X-Debug-Session-Id':'b20200'},body:JSON.stringify({sessionId:'b20200',location:'app-worldbet.js:init',message:'init started',data:{},timestamp:Date.now(),hypothesisId:'H1'})}).catch(()=>{});
+    // #endregion
     try {
       this.loadSessionPrefs();
       this.bindEvents();
@@ -2053,6 +2056,9 @@ class WorldBetAI {
         this.updateAuthHeader();
       }
       await this.loadAllFixtures();
+      // #region agent log
+      fetch('http://127.0.0.1:7369/ingest/98400584-96ec-4b04-879d-7b951a0d12c7',{method:'POST',headers:{'Content-Type':'application/json','X-Debug-Session-Id':'b20200'},body:JSON.stringify({sessionId:'b20200',location:'app-worldbet.js:init',message:'fixtures loaded, navigating dashboard',data:{fixtureCount:this.fixtures.length,loading:this.loading},timestamp:Date.now(),hypothesisId:'H3'})}).catch(()=>{});
+      // #endregion
       this.navigate('dashboard');
       this.updateFooter();
       this.startCountdown();
@@ -2094,6 +2100,9 @@ class WorldBetAI {
       this.showToast(err.message || 'Error al cargar predicciones');
     } finally {
       this.predictionsLoading = false;
+      // #region agent log
+      fetch('http://127.0.0.1:7369/ingest/98400584-96ec-4b04-879d-7b951a0d12c7',{method:'POST',headers:{'Content-Type':'application/json','X-Debug-Session-Id':'b20200'},body:JSON.stringify({sessionId:'b20200',location:'app-worldbet.js:bootstrapData',message:'bootstrapData finished',data:{predictionCount:Object.keys(this.predictions).length},timestamp:Date.now(),hypothesisId:'H4'})}).catch(()=>{});
+      // #endregion
       this.render();
     }
   }
