@@ -172,5 +172,63 @@ class BetsManager {
 
   statusClass(status) {
     return { pending: 'value-med', won: 'value-high', lost: 'value-low', void: '' }[status] || '';
+  },
+
+  evaluateSnapshotHit(snapshot) {
+    const m = snapshot.matches;
+    const rec = snapshot.recommendation;
+    if (!m || m.status !== 'finished' || m.home_score == null || m.away_score == null || !rec) return null;
+    const label = rec.primaryBet || rec.modelWinner;
+    const type = rec.primaryType || 'ganador';
+    if (!label) return null;
+    const result = BetSettlement.settleBet(
+      type, label, m.home_team, m.away_team, m.home_score, m.away_score
+    );
+    if (result === 'void') return null;
+    return result === 'won';
+  },
+
+  async computeModelBacktest(limit = 200) {
+    const snapshots = await this.loadLatestSnapshots(limit);
+    const byMatch = new Map();
+    snapshots.forEach(s => {
+      if (!byMatch.has(s.match_id)) byMatch.set(s.match_id, s);
+    });
+    const evaluated = [];
+    byMatch.forEach(s => {
+      const hit = this.evaluateSnapshotHit(s);
+      if (hit === null) return;
+      evaluated.push({ hit, at: s.computed_at });
+    });
+    if (!evaluated.length) {
+      return { hasData: false, hitRate: 0, sampleSize: 0, history: [] };
+    }
+    const wins = evaluated.filter(e => e.hit).length;
+    const hitRate = (wins / evaluated.length) * 100;
+    const buckets = new Map();
+    evaluated.forEach(e => {
+      const d = new Date(e.at);
+      const key = `${d.getFullYear()}-W${Math.ceil((d.getDate()) / 7)}`;
+      if (!buckets.has(key)) buckets.set(key, { wins: 0, total: 0 });
+      const b = buckets.get(key);
+      b.total++;
+      if (e.hit) b.wins++;
+    });
+    const history = [...buckets.entries()]
+      .sort((a, b) => a[0].localeCompare(b[0]))
+      .slice(-8)
+      .map(([week, b], i) => ({
+        week: `Sem ${i + 1}`,
+        accuracy: Math.round((b.wins / b.total) * 1000) / 10
+      }));
+    if (!history.length) {
+      history.push({ week: 'Total', accuracy: Math.round(hitRate * 10) / 10 });
+    }
+    return {
+      hasData: true,
+      hitRate: Math.round(hitRate * 10) / 10,
+      sampleSize: evaluated.length,
+      history
+    };
   }
 }

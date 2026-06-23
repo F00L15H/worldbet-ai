@@ -30,7 +30,7 @@ Deno.serve(async (req) => {
       const { error: insErr } = await supabase.from('prediction_snapshots').insert({
         match_id: m.id,
         recommendation,
-        data_sources: ['Server cron (Poisson simplificado)'],
+        data_sources: ['Server (Poisson DC + localía)'],
         computed_at: new Date().toISOString(),
       });
       if (!insErr) created++;

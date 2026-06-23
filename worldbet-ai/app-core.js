@@ -254,7 +254,33 @@ class ApiClient {
     const id2 = t2?.response?.[0]?.team?.id;
     if (!id1 || !id2) return null;
     return this.fetchApi(`${APIFOOTBALL_BASE}/fixtures/headtohead?h2h=${id1}-${id2}`, { headers }, { useProxy: true, ttlMs: 15 * 60 * 1000 });
-  }
+  },
+  async fetchTeamStatistics(teamName, league = 1, season = 2026) {
+    if (!this.config.apifootballKey) return null;
+    const headers = { 'x-rapidapi-key': this.config.apifootballKey };
+    const search = await this.fetchApi(`${APIFOOTBALL_BASE}/teams?search=${encodeURIComponent(teamName)}`, { headers }, { useProxy: true, ttlMs: 60 * 60 * 1000 });
+    const teamId = search?.response?.[0]?.team?.id;
+    if (!teamId) return null;
+    return this.fetchApi(
+      `${APIFOOTBALL_BASE}/teams/statistics?league=${league}&season=${season}&team=${teamId}`,
+      { headers },
+      { useProxy: true, ttlMs: 15 * 60 * 1000 }
+    );
+  },
+  parseTeamStatistics(apiResponse, leagueAvg = 1.35) {
+    const s = apiResponse?.response;
+    if (!s?.goals) return null;
+    const gf = parseFloat(s.goals.for?.average?.total) || parseFloat(s.goals.for?.total?.total) / Math.max(s.fixtures?.played?.total || 1, 1);
+    const ga = parseFloat(s.goals.against?.average?.total) || parseFloat(s.goals.against?.total?.total) / Math.max(s.fixtures?.played?.total || 1, 1);
+    if (!gf || !ga) return null;
+    return {
+      attack: Math.max(0.4, gf / leagueAvg),
+      defense: Math.max(0.4, leagueAvg / Math.max(ga, 0.5)),
+      xgFor: gf * 0.92,
+      xgAgainst: ga * 0.92,
+      played: s.fixtures?.played?.total || 0
+    };
+  },
   parseOddsApiForMatch(events, homeTeam, awayTeam) {
     if (!Array.isArray(events)) return null;
     const match = events.find(e => teamsMatch(e.home_team, homeTeam) && teamsMatch(e.away_team, awayTeam));
@@ -311,6 +337,9 @@ class ApiClient {
 
 // ========== PREDICTION ENGINE ==========
 const PredictionEngine = {
+  HOME_ADVANTAGE_GOALS: 0.12,
+  MARKET_SHRINK_WEIGHT: 0.7,
+  DIXON_COLES_RHO: -0.13,
   /**
    * P(X=k) = e^(-λ) * λ^k / k!
    * Distribución de Poisson para goles esperados.
@@ -318,25 +347,37 @@ const PredictionEngine = {
   poissonProbability(lambda, k) {
     return (Math.exp(-lambda) * Math.pow(lambda, k)) / factorial(k);
   },
+  dixonColesTau(i, j, homeLambda, awayLambda, rho = -0.13) {
+    if (i === 0 && j === 0) return 1 - homeLambda * awayLambda * rho;
+    if (i === 0 && j === 1) return 1 + homeLambda * rho;
+    if (i === 1 && j === 0) return 1 + awayLambda * rho;
+    if (i === 1 && j === 1) return 1 - rho;
+    return 1;
+  },
   /**
-   * Modelo Poisson bivariado: calcula probabilidades 1X2
-   * a partir de fuerzas de ataque/defensa relativas.
+   * Modelo Poisson bivariado + Dixon-Coles: calcula probabilidades 1X2.
    */
-  predictMatchScore(homeAttack, homeDefense, awayAttack, awayDefense, leagueAvg = 1.35) {
-    const homeLambda = homeAttack * awayDefense * leagueAvg;
-    const awayLambda = awayAttack * homeDefense * leagueAvg;
+  predictMatchScore(homeAttack, homeDefense, awayAttack, awayDefense, leagueAvg = 1.35, opts = {}) {
+    let homeLambda = homeAttack * awayDefense * leagueAvg;
+    let awayLambda = awayAttack * homeDefense * leagueAvg;
+    if (opts.homeAdvantage !== false) homeLambda += this.HOME_ADVANTAGE_GOALS;
+    const rho = opts.rho ?? this.DIXON_COLES_RHO;
     const maxGoals = 8;
     let homeWin = 0, draw = 0, awayWin = 0;
     const scoreProbabilities = [];
     for (let i = 0; i <= maxGoals; i++) {
       for (let j = 0; j <= maxGoals; j++) {
-        const prob = this.poissonProbability(homeLambda, i) * this.poissonProbability(awayLambda, j);
+        const tau = this.dixonColesTau(i, j, homeLambda, awayLambda, rho);
+        const prob = tau * this.poissonProbability(homeLambda, i) * this.poissonProbability(awayLambda, j);
         scoreProbabilities.push({ home: i, away: j, probability: prob });
         if (i > j) homeWin += prob;
         else if (i === j) draw += prob;
         else awayWin += prob;
       }
     }
+    const total = homeWin + draw + awayWin || 1;
+    homeWin /= total; draw /= total; awayWin /= total;
+    scoreProbabilities.forEach(s => { s.probability /= total; });
     const sorted = [...scoreProbabilities].sort((a, b) => b.probability - a.probability);
     return {
       homeWin, draw, awayWin,
@@ -345,6 +386,18 @@ const PredictionEngine = {
       top5Scores: sorted.slice(0, 5),
       scoreProbabilities: sorted
     };
+  },
+  shrink1X2ToMarket(prediction, data, weight = 0.7) {
+    const h = data?.marketHomeOdds, d = data?.marketDrawOdds, a = data?.marketAwayOdds;
+    if (!h || !d || !a) return prediction;
+    const impH = 1 / h, impD = 1 / d, impA = 1 / a;
+    const sum = impH + impD + impA;
+    const mH = impH / sum, mD = impD / sum, mA = impA / sum;
+    const w = weight;
+    const homeWin = w * prediction.homeWin + (1 - w) * mH;
+    const draw = w * prediction.draw + (1 - w) * mD;
+    const awayWin = w * prediction.awayWin + (1 - w) * mA;
+    return { ...prediction, homeWin, draw, awayWin };
   },
   /**
    * Ajuste 60% Poisson base + 40% xG como corrector.
@@ -359,7 +412,7 @@ const PredictionEngine = {
   },
   recalcFromLambdas(homeLambda, awayLambda, leagueAvg = 1.35) {
     const ha = homeLambda / leagueAvg, hd = 1, aa = awayLambda / leagueAvg, ad = 1;
-    return this.predictMatchScore(ha, hd, aa, ad, leagueAvg);
+    return this.predictMatchScore(ha, hd, aa, ad, leagueAvg, { homeAdvantage: false });
   },
   /**
    * EV = (prob_modelo * cuota) - 1
@@ -552,10 +605,14 @@ const PredictionEngine = {
   },
   runFullPrediction(fixture, data, config) {
     const base = this.predictMatchScore(
-      data.homeAttack, data.homeDefense, data.awayAttack, data.awayDefense, config.leagueAvgGoals
+      data.homeAttack, data.homeDefense, data.awayAttack, data.awayDefense, config.leagueAvgGoals,
+      { homeAdvantage: false }
     );
     const adj = this.adjustWithXG(base, data.homeXGFor, data.homeXGAgainst, data.awayXGFor, data.awayXGAgainst);
-    const finalPred = this.recalcFromLambdas(adj.adjustedHomeLambda, adj.adjustedAwayLambda, config.leagueAvgGoals);
+    let hL = adj.adjustedHomeLambda + this.HOME_ADVANTAGE_GOALS;
+    let aL = adj.adjustedAwayLambda;
+    let finalPred = this.recalcFromLambdas(hL, aL, config.leagueAvgGoals);
+    finalPred = this.shrink1X2ToMarket(finalPred, data, this.MARKET_SHRINK_WEIGHT);
     const features = this.buildFeatures(fixture, data, config.leagueAvgGoals);
     const over25Prob = this.over25Probability(adj.adjustedHomeLambda, adj.adjustedAwayLambda);
     const under25Prob = 1 - over25Prob;

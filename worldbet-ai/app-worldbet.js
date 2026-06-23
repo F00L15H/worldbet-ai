@@ -20,11 +20,8 @@ class WorldBetAI {
     this.predictions = {};
     this.odds = {};
     this.valueBets = [];
-    this.modelHistory = [
-      { week: 'Sem 1', accuracy: 52 }, { week: 'Sem 2', accuracy: 55 },
-      { week: 'Sem 3', accuracy: 58 }, { week: 'Sem 4', accuracy: 54 },
-      { week: 'Sem 5', accuracy: 61 }, { week: 'Sem 6', accuracy: 63 }
-    ];
+    this.modelHistory = [];
+    this.modelAccuracy = { hasData: false, hitRate: 0, sampleSize: 0, history: [] };
     this.aiHistory = [];
     this.currentView = 'dashboard';
     this.demoMode = true;
@@ -130,6 +127,7 @@ class WorldBetAI {
       this.fixtures = this.bets.mergeDbStatusIntoFixtures(this.fixtures, dbMatches);
       if (this.auth.isLoggedIn) await this.bets.loadUserBets();
       await this.oddsLive.init();
+      await this.refreshModelAccuracy();
     }
     if (this.hasConfiguredKeys()) {
       this.apiClient = new ApiClient(this.config);
@@ -509,11 +507,30 @@ class WorldBetAI {
           }
         }
         if (this.config.apifootballKey) {
-          const [homeForm, awayForm, h2h] = await Promise.all([
+          const [homeStats, awayStats, homeForm, awayForm, h2h] = await Promise.all([
+            this.apiClient.fetchTeamStatistics(fixture.homeTeam),
+            this.apiClient.fetchTeamStatistics(fixture.awayTeam),
             this.apiClient.fetchTeamForm(fixture.homeTeam),
             this.apiClient.fetchTeamForm(fixture.awayTeam),
             this.apiClient.fetchHeadToHead(fixture.homeTeam, fixture.awayTeam)
           ]);
+          const leagueAvg = this.config.leagueAvgGoals || 1.35;
+          const homeParsed = this.apiClient.parseTeamStatistics(homeStats, leagueAvg);
+          const awayParsed = this.apiClient.parseTeamStatistics(awayStats, leagueAvg);
+          if (homeParsed?.played >= 3) {
+            data.homeAttack = homeParsed.attack;
+            data.homeDefense = homeParsed.defense;
+            data.homeXGFor = homeParsed.xgFor;
+            data.homeXGAgainst = homeParsed.xgAgainst;
+            data.dataSources.push('API-Football (stats local)');
+          }
+          if (awayParsed?.played >= 3) {
+            data.awayAttack = awayParsed.attack;
+            data.awayDefense = awayParsed.defense;
+            data.awayXGFor = awayParsed.xgFor;
+            data.awayXGAgainst = awayParsed.xgAgainst;
+            data.dataSources.push('API-Football (stats visitante)');
+          }
           if (homeForm?.fixtures?.response?.length) {
             data.homeForm = homeForm.fixtures.response.slice(0, 5).map(f => {
               const side = f.teams.home.id === homeForm.teamId ? 'home' : 'away';
@@ -559,8 +576,76 @@ class WorldBetAI {
     }
 
     data.dataSources = [...new Set(data.dataSources)];
+    data.isVerified = this.isDataVerified(data.dataSources);
     this.matchDataCache[key] = data;
     return data;
+  }
+
+  isDataVerified(sources) {
+    if (!sources?.length) return false;
+    return sources.some(s => !/demo|simulado/i.test(s));
+  }
+
+  async refreshModelAccuracy() {
+    if (!SupabaseClient.isConfigured()) {
+      this.modelAccuracy = { hasData: false, hitRate: 0, sampleSize: 0, history: [] };
+      this.modelHistory = [];
+      return;
+    }
+    const result = await this.bets.computeModelBacktest();
+    this.modelAccuracy = result;
+    this.modelHistory = result.history;
+  }
+
+  renderConfidenceBadge(conf) {
+    if (!conf) return '';
+    const cls = (conf || '').toLowerCase();
+    return `<span class="conf-badge ${cls}">${escapeHtml(conf)}</span>`;
+  }
+
+  renderDataTrustChip(sources, isVerified) {
+    const verified = isVerified ?? this.isDataVerified(sources);
+    const label = verified ? 'Datos verificados' : 'Modo demo';
+    const src = sources?.length ? sources.filter(s => !/demo|simulado/i.test(s)).slice(0, 2).join(' · ') : 'Poisson + xG';
+    return `<span class="data-trust-chip ${verified ? 'verified' : 'demo'}" title="${escapeHtml((sources || []).join(', '))}">
+      <i data-lucide="${verified ? 'shield-check' : 'flask-conical'}" style="width:12px;height:12px"></i>
+      ${verified ? label : label}${verified && src ? ` · ${escapeHtml(src)}` : ''}
+    </span>`;
+  }
+
+  renderProbBar(p, homeLabel, awayLabel) {
+    if (!p) return '';
+    const h = Math.max(p.homeWin * 100, 1);
+    const d = Math.max(p.draw * 100, 1);
+    const a = Math.max(p.awayWin * 100, 1);
+    return `
+      <div class="prob-bar-labels">
+        <span><strong>${pct(p.homeWin)}</strong> ${escapeHtml(homeLabel || '1')}</span>
+        <span><strong>${pct(p.draw)}</strong> X</span>
+        <span><strong>${pct(p.awayWin)}</strong> ${escapeHtml(awayLabel || '2')}</span>
+      </div>
+      <div class="prob-bar" role="img" aria-label="Probabilidades 1X2">
+        <div class="prob-bar-seg home" style="width:${h}%"></div>
+        <div class="prob-bar-seg draw" style="width:${d}%"></div>
+        <div class="prob-bar-seg away" style="width:${a}%"></div>
+      </div>`;
+  }
+
+  renderRecHero(rec, fixture) {
+    if (!rec) return '';
+    const kelly = rec.primaryKelly;
+    const gain = kelly ? kelly.stakeSuggestion * ((rec.primaryOdds || 2) - 1) : 0;
+    return `<div class="rec-hero">
+      <div class="rec-hero-title">Apuesta recomendada ${this.renderConfidenceBadge(rec.primaryConfidence)}</div>
+      <div class="rec-hero-pick">${escapeHtml(rec.primaryBet)}</div>
+      <div class="rec-hero-meta">
+        <span>Prob. <strong>${pct(rec.primaryProb)}</strong></span>
+        ${rec.primaryOdds ? `<span>Cuota <strong>${rec.primaryOdds.toFixed(2)}</strong></span>` : ''}
+        ${kelly ? `<span>Stake <strong>${euro(kelly.stakeSuggestion)}</strong></span>` : ''}
+        ${gain > 0 ? `<span>Ganancia <strong>+${euro(gain)}</strong></span>` : ''}
+      </div>
+      ${rec.primaryReason ? `<p style="font-size:var(--text-xs);color:var(--color-text-muted);margin-top:var(--space-2)">${escapeHtml(rec.primaryReason)}</p>` : ''}
+    </div>`;
   }
 
   async computeAllPredictions() {
@@ -577,6 +662,7 @@ class WorldBetAI {
       await this.persistSnapshot(f.id, pred);
     }
     this.rebuildValueBets();
+    if (SupabaseClient.isConfigured()) await this.refreshModelAccuracy();
   }
 
   refreshAllPredictions() {
@@ -619,8 +705,10 @@ class WorldBetAI {
 
   renderAnalysisPickRow(v) {
     return `<div class="analysis-pick-row" style="padding:var(--space-3);background:var(--color-surface-offset);border-radius:var(--radius-md);margin-bottom:var(--space-2)">
-      <strong>${escapeHtml(v.label)}</strong> @ ${v.odds.toFixed(2)}<br>
-      <span style="font-size:var(--text-sm)">Prob. modelo: ${pct(v.prob)} · Confianza: ${v.confidence} · Kelly 1/4: ${pct(v.kelly.recommendedBet)} (€${v.kelly.stakeSuggestion.toFixed(2)})</span>
+      <div style="display:flex;justify-content:space-between;align-items:center;gap:var(--space-2);flex-wrap:wrap">
+        <strong>${escapeHtml(v.label)}</strong> ${this.renderConfidenceBadge(v.confidence)}
+      </div>
+      <span style="font-size:var(--text-sm)">@ ${v.odds.toFixed(2)} · Prob. modelo: ${pct(v.prob)} · Kelly 1/4: ${pct(v.kelly.recommendedBet)} (€${v.kelly.stakeSuggestion.toFixed(2)})</span>
     </div>`;
   }
 
@@ -849,6 +937,7 @@ class WorldBetAI {
   }
 
   initDashboardCharts() {
+    if (!this.modelAccuracy?.hasData || !this.modelHistory?.length) return;
     setTimeout(() => ChartManager.createPerformanceLine('chart-performance', this.modelHistory), 100);
   }
 
@@ -856,31 +945,51 @@ class WorldBetAI {
     const next = this.getNextMatch();
     const todayBets = this.valueBets.filter(v => v.date?.slice(0, 10) === new Date().toISOString().slice(0, 10));
     const top3 = this.valueBets.slice(0, 3);
-    const accuracy = this.modelHistory[this.modelHistory.length - 1]?.accuracy || 58;
+    const acc = this.modelAccuracy;
+    const accuracyLabel = acc.hasData ? acc.hitRate : null;
     const userStats = this.bets.getStats();
-    const roi = this.auth.isLoggedIn ? userStats.roi : 12.4;
+    const roi = this.auth.isLoggedIn ? userStats.roi : null;
+    const trustChip = this.renderDataTrustChip(
+      this.apiTrust.trusted ? this.apiTrust.validSources : ['Demo'],
+      this.apiTrust.trusted
+    );
     return `
       <h1 class="view-title">Dashboard</h1>
+      <div style="margin-bottom:var(--space-4)">${trustChip}</div>
       ${!SupabaseClient.isConfigured() ? '<p style="color:var(--color-warning);margin-bottom:var(--space-4);font-size:var(--text-sm)">Configura Supabase en el build para guardar apuestas y usuarios.</p>' : ''}
       <div class="kpi-grid">
         <div class="kpi-card"><div class="kpi-label">Partidos</div><div class="kpi-value" data-countup="${this.fixtures.length}">0</div></div>
         <div class="kpi-card"><div class="kpi-label">Apuestas Hoy</div><div class="kpi-value" data-countup="${todayBets.length || this.valueBets.length}">0</div></div>
-        <div class="kpi-card"><div class="kpi-label">Precisión Modelo</div><div class="kpi-value" data-countup="${accuracy}" data-suffix="%" data-decimals="1">0</div></div>
-        <div class="kpi-card"><div class="kpi-label">${this.auth.isLoggedIn ? 'Tu ROI' : 'ROI Acumulado'}</div><div class="kpi-value" data-countup="${roi.toFixed(1)}" data-suffix="%" data-decimals="1">0</div></div>
+        <div class="kpi-card">
+          <div class="kpi-label">Precisión Modelo</div>
+          ${accuracyLabel != null
+            ? `<div class="kpi-value" data-countup="${accuracyLabel}" data-suffix="%" data-decimals="1">0</div>
+               <div style="font-size:10px;color:var(--color-text-muted);margin-top:4px">${acc.sampleSize} partidos evaluados</div>`
+            : `<div class="kpi-value" style="font-size:var(--text-lg)">—</div>
+               <div style="font-size:10px;color:var(--color-text-muted);margin-top:4px">Sin datos aún</div>`}
+        </div>
+        <div class="kpi-card">
+          <div class="kpi-label">${this.auth.isLoggedIn ? 'Tu ROI' : 'ROI Modelo'}</div>
+          ${roi != null
+            ? `<div class="kpi-value" data-countup="${roi.toFixed(1)}" data-suffix="%" data-decimals="1">0</div>`
+            : `<div class="kpi-value" style="font-size:var(--text-lg)">—</div>
+               <div style="font-size:10px;color:var(--color-text-muted);margin-top:4px">Inicia sesión</div>`}
+        </div>
       </div>
       <div class="grid-2">
-        <div class="card">
+        <div class="card next-match-card">
           <h2 class="card-title">Próximo Partido</h2>
           ${next ? `
             <div class="match-teams">
-              <span class="team"><img src="${flagUrl(next.homeTeam)}" alt="" loading="lazy" width="28" height="20">${escapeHtml(next.homeTeam)}</span>
+              <span class="team"><img src="${flagUrl(next.homeTeam)}" alt="" loading="lazy" width="32" height="22">${escapeHtml(next.homeTeam)}</span>
               <span class="vs">VS</span>
-              <span class="team">${escapeHtml(next.awayTeam)}<img src="${flagUrl(next.awayTeam)}" alt="" loading="lazy" width="28" height="20"></span>
+              <span class="team">${escapeHtml(next.awayTeam)}<img src="${flagUrl(next.awayTeam)}" alt="" loading="lazy" width="32" height="22"></span>
             </div>
             <p class="match-meta">${formatDate(next.kickoffUtc)} · ${formatTime(next.kickoffUtc)} · ${escapeHtml(next.stadium)}</p>
+            ${this.predictions[next.id]?.prediction ? this.renderProbBar(this.predictions[next.id].prediction, next.homeTeam, next.awayTeam) : ''}
             ${this.predictions[next.id]?.recommendation ? this.renderRecBox(this.predictions[next.id].recommendation, true) : ''}
-            <div class="countdown" id="countdown-timer">--:--:--</div>
-            <button class="btn btn-primary" style="margin-top:var(--space-4)" data-match="${next.id}">Ver Predicción</button>
+            <div class="countdown countdown-lg" id="countdown-timer">--:--:--</div>
+            <button class="btn btn-primary" style="margin-top:var(--space-4);width:100%" data-match="${next.id}">Ver Predicción</button>
           ` : '<div class="empty-state"><div class="empty-icon">⚽</div><p>No hay partidos próximos</p></div>'}
         </div>
         <div class="card">
@@ -898,8 +1007,44 @@ class WorldBetAI {
       </div>
       <div class="card">
         <h2 class="card-title">Rendimiento del Modelo</h2>
-        <div class="chart-box"><canvas id="chart-performance" height="200"></canvas></div>
+        ${acc.hasData
+          ? `<p style="font-size:var(--text-sm);color:var(--color-text-muted);margin-bottom:var(--space-3)">Hit rate real: ${acc.hitRate}% sobre ${acc.sampleSize} predicciones con resultado</p>
+             <div class="chart-box"><canvas id="chart-performance" height="200"></canvas></div>`
+          : `<div class="empty-state" style="padding:var(--space-8)"><p>El gráfico aparecerá cuando haya partidos finalizados con snapshots guardados.</p></div>`}
       </div>`;
+  }
+
+  renderKnockoutBracket(list) {
+    const rounds = ['round-of-32', 'round-of-16', 'quarter-finals', 'semi-finals', 'third-place', 'final'];
+    const byRound = {};
+    list.forEach(f => {
+      const stage = f.stage || 'other';
+      if (!byRound[stage]) byRound[stage] = [];
+      byRound[stage].push(f);
+    });
+    const html = rounds.filter(r => byRound[r]?.length).map(round => `
+      <div class="bracket-round">
+        <div class="bracket-round-title">${STAGE_LABELS[round] || round}</div>
+        <div class="bracket-matches">
+          ${byRound[round].map(f => {
+            const homeW = f.status === 'finished' && f.homeScore > f.awayScore;
+            const awayW = f.status === 'finished' && f.awayScore > f.homeScore;
+            return `<div class="bracket-slot" data-match="${f.id}" role="button" tabindex="0">
+              <div class="bracket-team ${homeW ? 'winner' : ''}">
+                <img src="${flagUrl(f.homeTeam)}" alt="" loading="lazy">${escapeHtml(f.homeTeam)}
+                ${f.status === 'finished' ? `<span class="bracket-score">${f.homeScore}</span>` : ''}
+              </div>
+              <div class="bracket-team ${awayW ? 'winner' : ''}">
+                <img src="${flagUrl(f.awayTeam)}" alt="" loading="lazy">${escapeHtml(f.awayTeam)}
+                ${f.status === 'finished' ? `<span class="bracket-score">${f.awayScore}</span>` : ''}
+              </div>
+              <p style="font-size:10px;color:var(--color-text-muted);margin-top:var(--space-2)">${formatDate(f.kickoffUtc)} · ${formatTime(f.kickoffUtc)}</p>
+            </div>`;
+          }).join('')}
+        </div>
+      </div>
+    `).join('');
+    return `<div class="knockout-bracket">${html || '<div class="empty-state card"><p>Sin partidos eliminatorios</p></div>'}</div>`;
   }
 
   renderFixtures(view) {
@@ -925,8 +1070,10 @@ class WorldBetAI {
         </select>
         <input type="search" id="filter-team" placeholder="Buscar equipo..." value="${escapeHtml(this.filters.team)}">
       </div>
-      ${list.length ? `<div class="match-grid">${list.map(f => this.renderMatchCard(f)).join('')}</div>` :
-        '<div class="empty-state card"><div class="empty-icon">⚽</div><p>Sin partidos con estos filtros</p></div>'}
+      ${view === 'knockout' && list.length ? this.renderKnockoutBracket(list) : ''}
+      ${view !== 'knockout' && list.length ? `<div class="match-grid">${list.map(f => this.renderMatchCard(f)).join('')}</div>` :
+        view !== 'knockout' ? '<div class="empty-state card"><div class="empty-icon">⚽</div><p>Sin partidos con estos filtros</p></div>' :
+        !list.length ? '<div class="empty-state card"><div class="empty-icon">⚽</div><p>Sin partidos con estos filtros</p></div>' : ''}
     `;
   }
 
@@ -934,6 +1081,7 @@ class WorldBetAI {
     const pred = this.predictions[f.id];
     const rec = pred?.recommendation;
     const d = pred?.data;
+    const p = pred?.prediction;
     const hasPick = pred?.recommendation?.primaryBet;
     return `
       <article class="match-card">
@@ -942,17 +1090,19 @@ class WorldBetAI {
           <span class="vs">VS</span>
           <span class="team">${escapeHtml(f.awayTeam)}<img src="${flagUrl(f.awayTeam)}" alt="" loading="lazy" width="28" height="20"></span>
         </div>
+        ${p ? this.renderProbBar(p, '1', '2') : ''}
         <div class="match-meta">
           ${formatDate(f.kickoffUtc)} · ${formatTime(f.kickoffUtc)}<br>
           ${escapeHtml(f.stadium)}, ${escapeHtml(f.hostCity)}
         </div>
-        <div style="display:flex;gap:var(--space-2);flex-wrap:wrap;margin-bottom:var(--space-3)">
+        <div style="display:flex;gap:var(--space-2);flex-wrap:wrap;margin-bottom:var(--space-3);align-items:center">
           ${f.group ? `<span class="badge badge-group">Grupo ${f.group}</span>` : ''}
           <span class="badge badge-group">${STAGE_LABELS[f.stage] || f.stage}</span>
           ${this.matchStatusBadge(f)}
           ${f.isPlaceholder ? '<span class="badge badge-tbd">Por definir</span>' : ''}
-          ${hasPick ? '<span class="badge badge-value">Apuesta lista</span>' : ''}
+          ${hasPick ? this.renderConfidenceBadge(rec.primaryConfidence) : ''}
         </div>
+        ${d ? this.renderDataTrustChip(d.dataSources, d.isVerified) : ''}
         ${f.status === 'finished' && f.homeScore != null ? `<p style="font-weight:600;margin-bottom:var(--space-2)">Resultado: ${f.homeScore} - ${f.awayScore}</p>` : ''}
         ${f.isPlaceholder
           ? '<p style="font-size:var(--text-sm);color:var(--color-text-muted)">Equipos por definir</p>'
@@ -1248,15 +1398,12 @@ class WorldBetAI {
             <button class="icon-btn" id="modal-close" aria-label="Cerrar análisis"><i data-lucide="x"></i></button>
           </div>
           <div class="modal-body">
-            ${pred.recommendation ? this.renderRecBox(pred.recommendation) : ''}
+            ${this.renderDataTrustChip(d.dataSources, d.isVerified)}
+            ${pred.recommendation ? this.renderRecHero(pred.recommendation, fixture) : ''}
             <div class="grid-2">
               <div>
                 <h3 style="margin-bottom:var(--space-3)">Predicción del Modelo</h3>
-                <div class="prob-grid">
-                  <div class="prob-cell"><div>${escapeHtml(fixture.homeTeam)}</div><div class="pct">${pct(p.homeWin)}</div></div>
-                  <div class="prob-cell"><div>Empate</div><div class="pct">${pct(p.draw)}</div></div>
-                  <div class="prob-cell"><div>${escapeHtml(fixture.awayTeam)}</div><div class="pct">${pct(p.awayWin)}</div></div>
-                </div>
+                ${this.renderProbBar(p, fixture.homeTeam, fixture.awayTeam)}
                 <p style="margin:var(--space-3) 0"><strong>Score más probable:</strong> ${p.mostLikelyScore.home}-${p.mostLikelyScore.away} (${pct(p.mostLikelyScore.probability)})</p>
                 <p><strong>Top 5:</strong> ${p.top5Scores.map(s => `${s.home}-${s.away}`).join(', ')}</p>
                 <p><strong>Goles esperados:</strong> ${(p.expectedHomeGoals + p.expectedAwayGoals).toFixed(1)}</p>
@@ -1305,9 +1452,18 @@ class WorldBetAI {
             ` : ''}
             <details class="chart-accordion">
               <summary>Gráficos y mapa de calor</summary>
-            <div class="chart-row">
+            <div class="chart-tabs" id="chart-tabs">
+              <button type="button" class="chart-tab active" data-chart-tab="prob">Probabilidades</button>
+              <button type="button" class="chart-tab" data-chart-tab="goals">Goles</button>
+              <button type="button" class="chart-tab" data-chart-tab="xg">xG</button>
+            </div>
+            <div class="chart-panel" data-chart-panel="prob">
               <div class="chart-box"><canvas id="chart-prob" height="180"></canvas></div>
+            </div>
+            <div class="chart-panel" data-chart-panel="goals" style="display:none">
               <div class="chart-box"><canvas id="chart-goals" height="180"></canvas></div>
+            </div>
+            <div class="chart-panel" data-chart-panel="xg" style="display:none">
               <div class="chart-box"><canvas id="chart-xg" height="180"></canvas></div>
             </div>
             <div class="chart-box" style="margin-top:var(--space-4)">
@@ -1319,6 +1475,14 @@ class WorldBetAI {
         </div>
       </div>`;
     lucide.createIcons();
+    document.querySelectorAll('#chart-tabs [data-chart-tab]').forEach(tab => {
+      tab.addEventListener('click', () => {
+        document.querySelectorAll('.chart-tab').forEach(t => t.classList.toggle('active', t === tab));
+        document.querySelectorAll('[data-chart-panel]').forEach(p => {
+          p.style.display = p.dataset.chartPanel === tab.dataset.chartTab ? '' : 'none';
+        });
+      });
+    });
     document.getElementById('modal-close').addEventListener('click', () => this.closeModal());
     document.getElementById('modal-overlay').addEventListener('click', e => {
       if (e.target.id === 'modal-overlay') this.closeModal();
