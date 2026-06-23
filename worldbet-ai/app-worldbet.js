@@ -321,7 +321,7 @@ class WorldBetAI {
               <div class="form-group"><label>Email</label><input type="email" id="auth-reg-email" autocomplete="email"></div>
               <div class="form-group"><label>Contraseña</label><input type="password" id="auth-reg-password" autocomplete="new-password" minlength="6"></div>
               <button class="btn btn-primary" id="btn-auth-register" type="button" style="width:100%">Crear cuenta</button>
-              <p style="font-size:var(--text-xs);color:var(--color-text-muted);margin-top:var(--space-3)">Bankroll inicial: €1.000 virtual</p>
+              <p style="font-size:var(--text-xs);color:var(--color-text-muted);margin-top:var(--space-3)">Bankroll inicial: €10.000 virtual</p>
             </div>
             <p id="auth-error" style="color:var(--color-error);margin-top:var(--space-3);font-size:var(--text-sm)"></p>
           </div>
@@ -363,6 +363,7 @@ class WorldBetAI {
         err.textContent = 'Cuenta creada. Revisa tu email para confirmar o inicia sesión.';
       } catch (e) { err.style.color = 'var(--color-error)'; err.textContent = e.message; }
     });
+    this._lockScroll();
   }
 
   bindEvents() {
@@ -861,7 +862,6 @@ class WorldBetAI {
     return `
       <h1 class="view-title">Dashboard</h1>
       ${!SupabaseClient.isConfigured() ? '<p style="color:var(--color-warning);margin-bottom:var(--space-4);font-size:var(--text-sm)">Configura Supabase en el build para guardar apuestas y usuarios.</p>' : ''}
-      ${SupabaseClient.isConfigured() && !this.auth.isLoggedIn ? '<p style="color:var(--color-text-muted);margin-bottom:var(--space-4);font-size:var(--text-sm)"><button class="btn btn-outline btn-sm" id="btn-dash-login" type="button">Inicia sesión</button> para guardar apuestas con bankroll virtual.</p>' : ''}
       <div class="kpi-grid">
         <div class="kpi-card"><div class="kpi-label">Partidos</div><div class="kpi-value" data-countup="${this.fixtures.length}">0</div></div>
         <div class="kpi-card"><div class="kpi-label">Apuestas Hoy</div><div class="kpi-value" data-countup="${todayBets.length || this.valueBets.length}">0</div></div>
@@ -1382,9 +1382,41 @@ class WorldBetAI {
       ChartManager.renderHeatmap('chart-heatmap', p.scoreProbabilities);
     }, 150);
     this.showToast('Análisis cargado');
+    this._lockScroll();
+  }
+
+  _isMobileLayout() {
+    return window.innerWidth <= 768;
+  }
+
+  _lockScroll() {
+    const main = document.getElementById('main-content');
+    if (this._isMobileLayout() && main) {
+      this._mainScrollTop = main.scrollTop;
+    } else {
+      this._scrollY = window.scrollY;
+      document.body.style.top = `-${this._scrollY}px`;
+      document.body.style.position = 'fixed';
+      document.body.style.width = '100%';
+    }
+    document.body.classList.add('modal-open');
+  }
+
+  _unlockScroll() {
+    document.body.classList.remove('modal-open');
+    document.body.style.position = '';
+    document.body.style.top = '';
+    document.body.style.width = '';
+    const main = document.getElementById('main-content');
+    if (this._isMobileLayout() && main) {
+      main.scrollTop = this._mainScrollTop || 0;
+    } else {
+      window.scrollTo(0, this._scrollY || 0);
+    }
   }
 
   closeModal() {
+    this._unlockScroll();
     ChartManager.destroyAll();
     document.getElementById('modal-root').innerHTML = '';
   }

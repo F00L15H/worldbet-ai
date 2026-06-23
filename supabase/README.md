@@ -2,8 +2,14 @@
 
 ## 1. Crear proyecto en supabase.com (plan gratuito)
 
-## 2. Ejecutar migración SQL
-Copia el contenido de `supabase/migrations/001_initial.sql` en el SQL Editor de Supabase.
+## 2. Ejecutar migraciones SQL
+En el SQL Editor de Supabase, ejecuta en orden el contenido de cada archivo:
+
+1. `supabase/migrations/001_initial.sql` — esquema base (perfiles, apuestas, etc.)
+2. `supabase/migrations/003_match_odds.sql` — tabla de cuotas en vivo
+3. `supabase/migrations/004_bankroll_10k.sql` — bankroll inicial €10.000 (nuevos y existentes)
+
+Si ya ejecutaste `001` antes, basta con aplicar `003` y `004`.
 
 ## 3. Configurar secrets
 ```bash

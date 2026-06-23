@@ -206,10 +206,12 @@
 html { -webkit-text-size-adjust: 100%; }
 body {
   min-height: 100dvh;
-  overscroll-behavior: none;
+  overscroll-behavior-y: contain;
   -webkit-tap-highlight-color: transparent;
   padding-top: var(--safe-top);
 }
+body.modal-open { overflow: hidden; touch-action: none; }
+body.modal-open .main { overflow: hidden; }
 
 .app {
   min-height: 100dvh;
@@ -292,11 +294,24 @@ input, select, textarea, .filters input, .filters select, .form-group input, .fo
 .analysis-picks-more { margin-top: var(--space-2); }
 
 @media (max-width: 768px) {
+  html, body { height: 100%; overflow: hidden; }
+  .app {
+    height: 100dvh;
+    overflow: hidden;
+    display: flex;
+    flex-direction: column;
+    padding-bottom: calc(var(--bottom-nav-h) + var(--safe-bottom));
+  }
   .bottom-nav { display: grid; }
   .sidebar, .hamburger, .sidebar-overlay { display: none !important; }
   .footer-bar { display: none; }
-  .layout { flex-direction: column; }
+  .layout { flex: 1; min-height: 0; overflow: hidden; flex-direction: column; }
   .main {
+    flex: 1;
+    min-height: 0;
+    overflow-y: auto;
+    -webkit-overflow-scrolling: touch;
+    overscroll-behavior-y: contain;
     padding: var(--space-3) var(--space-4);
     padding-bottom: var(--space-4);
     max-width: 100%;
@@ -326,10 +341,10 @@ input, select, textarea, .filters input, .filters select, .form-group input, .fo
   .toast {
     left: var(--space-4); right: var(--space-4); bottom: calc(var(--bottom-nav-h) + var(--safe-bottom) + 12px);
   }
-  .modal-overlay { padding: 0; align-items: stretch; }
+  .modal-overlay { padding: 0; align-items: stretch; overflow: hidden; }
   .modal {
-    max-width: 100%; margin: 0; min-height: 100dvh; border-radius: 0;
-    border: none; display: flex; flex-direction: column;
+    max-width: 100%; margin: 0; min-height: 100dvh; max-height: 100dvh; border-radius: 0;
+    border: none; display: flex; flex-direction: column; overflow: hidden;
   }
   .modal-body {
     flex: 1; overflow-y: auto; padding: var(--space-4);
@@ -2010,7 +2025,7 @@ class WorldBetAI {
               <div class="form-group"><label>Email</label><input type="email" id="auth-reg-email" autocomplete="email"></div>
               <div class="form-group"><label>Contraseña</label><input type="password" id="auth-reg-password" autocomplete="new-password" minlength="6"></div>
               <button class="btn btn-primary" id="btn-auth-register" type="button" style="width:100%">Crear cuenta</button>
-              <p style="font-size:var(--text-xs);color:var(--color-text-muted);margin-top:var(--space-3)">Bankroll inicial: €1.000 virtual</p>
+              <p style="font-size:var(--text-xs);color:var(--color-text-muted);margin-top:var(--space-3)">Bankroll inicial: €10.000 virtual</p>
             </div>
             <p id="auth-error" style="color:var(--color-error);margin-top:var(--space-3);font-size:var(--text-sm)"></p>
           </div>
@@ -2052,6 +2067,7 @@ class WorldBetAI {
         err.textContent = 'Cuenta creada. Revisa tu email para confirmar o inicia sesión.';
       } catch (e) { err.style.color = 'var(--color-error)'; err.textContent = e.message; }
     });
+    this._lockScroll();
   }
 
   bindEvents() {
@@ -2550,7 +2566,6 @@ class WorldBetAI {
     return `
       <h1 class="view-title">Dashboard</h1>
       ${!SupabaseClient.isConfigured() ? '<p style="color:var(--color-warning);margin-bottom:var(--space-4);font-size:var(--text-sm)">Configura Supabase en el build para guardar apuestas y usuarios.</p>' : ''}
-      ${SupabaseClient.isConfigured() && !this.auth.isLoggedIn ? '<p style="color:var(--color-text-muted);margin-bottom:var(--space-4);font-size:var(--text-sm)"><button class="btn btn-outline btn-sm" id="btn-dash-login" type="button">Inicia sesión</button> para guardar apuestas con bankroll virtual.</p>' : ''}
       <div class="kpi-grid">
         <div class="kpi-card"><div class="kpi-label">Partidos</div><div class="kpi-value" data-countup="${this.fixtures.length}">0</div></div>
         <div class="kpi-card"><div class="kpi-label">Apuestas Hoy</div><div class="kpi-value" data-countup="${todayBets.length || this.valueBets.length}">0</div></div>
@@ -3071,9 +3086,41 @@ class WorldBetAI {
       ChartManager.renderHeatmap('chart-heatmap', p.scoreProbabilities);
     }, 150);
     this.showToast('Análisis cargado');
+    this._lockScroll();
+  }
+
+  _isMobileLayout() {
+    return window.innerWidth <= 768;
+  }
+
+  _lockScroll() {
+    const main = document.getElementById('main-content');
+    if (this._isMobileLayout() && main) {
+      this._mainScrollTop = main.scrollTop;
+    } else {
+      this._scrollY = window.scrollY;
+      document.body.style.top = `-${this._scrollY}px`;
+      document.body.style.position = 'fixed';
+      document.body.style.width = '100%';
+    }
+    document.body.classList.add('modal-open');
+  }
+
+  _unlockScroll() {
+    document.body.classList.remove('modal-open');
+    document.body.style.position = '';
+    document.body.style.top = '';
+    document.body.style.width = '';
+    const main = document.getElementById('main-content');
+    if (this._isMobileLayout() && main) {
+      main.scrollTop = this._mainScrollTop || 0;
+    } else {
+      window.scrollTo(0, this._scrollY || 0);
+    }
   }
 
   closeModal() {
+    this._unlockScroll();
     ChartManager.destroyAll();
     document.getElementById('modal-root').innerHTML = '';
   }
